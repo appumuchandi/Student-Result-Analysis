@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Result Analysis | Login</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="auth-wrap">
+        <div class="card">
+            <div class="center">
+                <div class="hero">
+                    <div class="icon">🎓</div>
+                    <h1>Student Portal</h1>
+                    <p>Result Analysis System</p>
+                </div>
+            </div>
+            <form id="loginForm" autocomplete="on">
+                <div class="field"><label for="userId">User ID</label><input id="userId" name="userId"
+                        autocomplete="username" required placeholder="Enter User ID"></div><br>
+                <div class="field"><label for="password">Password</label><input id="password" name="password"
+                        type="password" autocomplete="current-password" required placeholder="Enter Password"></div>
+                <p id="loginMessage" class="message"></p><button class="btn" style="width:100%">Login</button>
+            </form>
+            <p class="center muted">New user? <button class="link-btn" id="createAccount" type="button">Create
+                    account</button></p>
+        </div>
+        <div class="footer">© 2026 Student Result Analysis System</div>
+    </div>
+    <script src="config.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>

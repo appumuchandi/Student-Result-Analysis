@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Student Search</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="brand">🎓 <span>Result</span> Analysis</div><button class="btn secondary"
+            id="logoutBtn">Logout</button>
+    </header>
+    <main class="page">
+        <div class="hero">
+            <div class="icon">🔎</div>
+            <h1>Find Your Result</h1>
+            <p>Enter your college details and USN to continue.</p>
+        </div>
+        <!-- Excel Import — visible to admin/HOD operator -->
+        <section class="card" style="text-align:center; margin-bottom:22px; background: linear-gradient(135deg, #ffffff, #f0f7ff); border: 1px dashed #a5b4fc;">
+            <h3 style="margin:0 0 6px; font-size:18px;">📊 Official Results Import</h3>
+            <p class="muted" style="margin:0 0 14px; font-size:14px;">For admin/HOD: Upload the official Excel sheet to import student results into the system.</p>
+            <a href="import_results.html" id="importExcelBtn" class="btn" style="text-decoration:none; display:inline-block; padding:14px 22px; font-size:15px;">📊 Import Student Excel</a>
+            <p class="muted" style="margin:10px 0 0; font-size:12px;">Supports .xlsx — preview before import • transactional safety</p>
+        </section>
+        <section class="card">
+            <form id="studentForm">
+                <div class="form-grid">
+                    <div class="field"><label for="collegeCode">College Code</label><input id="collegeCode" required
+                            placeholder="e.g. 123"></div>
+                    <div class="field"><label for="branch">Branch</label><select id="branch" required>
+                            <option value="">Select Branch</option>
+                            <option>ECE</option>
+                            <option>CSE</option>
+                            <option>ISE</option>
+                            <option>EEE</option>
+                            <option>ME</option>
+                            <option>CV</option>
+                        </select></div>
+                    <div class="field full"><label for="usn">USN</label><input id="usn" required
+                            placeholder="Enter University Seat Number" autocomplete="off"></div>
+                    <div class="field full"><label>CAPTCHA</label>
+                        <div class="captcha"><span id="captchaText" class="captcha-code"></span><button type="button"
+                                class="btn secondary" id="refreshCaptcha">↻ Refresh</button></div>
+                    </div>
+                    <div class="field full"><input id="captchaInput" required maxlength="5" placeholder="Enter CAPTCHA">
+                    </div>
+                </div>
+                <p id="message" class="message"></p><button class="btn" type="submit">Continue to Dashboard →</button>
+            </form>
+        </section>
+    </main>
+    <div class="footer">Secure • Fast • Easy Access</div>
+    <script src="config.js"></script>
+    <script src="script_home.js"></script>
+</body>
+
+</html>

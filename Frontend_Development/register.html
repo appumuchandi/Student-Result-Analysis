@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Create User</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="auth-wrap">
+        <div class="card">
+            <div class="hero">
+                <div class="icon">📝</div>
+                <h1>Create User</h1>
+                <p>Create your account to use Result Analysis</p>
+            </div>
+            <form id="registerForm" autocomplete="on">
+                <div class="field"><label>User Name</label><input type="text" id="name" name="name" autocomplete="name"
+                        placeholder="Enter your name" required></div><br>
+                <div class="field"><label>User ID</label><input id="regUserId" name="userId" type="text"
+                        autocomplete="username" placeholder="Enter a User ID" required></div><br>
+                <div class="field"><label>Phone Number</label><input type="tel" id="phone" name="phone"
+                        autocomplete="tel" placeholder="Enter a Phone Number" maxlength="10" required></div><br>
+                <div class="field"><label>Password</label><input id="regPassword" name="password" type="password"
+                        autocomplete="new-password" placeholder="Enter a Password" required></div><br>
+                <div class="field"><label>Confirm Password</label><input id="confirmPassword" name="confirmPassword"
+                        type="password" autocomplete="new-password" placeholder="Enter a Confirm Password" required>
+                </div><br>
+                <div class="actions"><button class="btn">Create Account</button><button class="btn secondary"
+                        type="button" id="backLogin">Back to Login</button></div>
+                <p id="registerMessage" class="message"></p>
+            </form>
+        </div>
+    </div>
+    <script src="config.js"></script>
+    <script src="Register.js"></script>
+</body>
+
+</html>

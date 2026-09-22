@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Dashboard | Result Analysis</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        /* Upload form responsive grid — Department | Batch | Semester | Excel file */
+        .upload-grid { display:grid; grid-template-columns: repeat(4,1fr); gap:16px; margin:14px 0; align-items:end; }
+        .upload-grid .field { min-width:0; }
+        .upload-grid .file-drop { padding:16px; }
+        .file-drop { border:2px dashed #cbd5e1; border-radius:16px; padding:22px; text-align:center; background:#fbfdff; transition:border-color .2s; max-width:100%; overflow:hidden; }
+        .file-drop.dragover { border-color: #2563eb; background:#eff6ff; }
+        .file-drop p { word-break:break-word; }
+        .alert { padding:12px 14px; border-radius:12px; font-size:13px; margin:10px 0; word-break:break-word; overflow-wrap:anywhere; }
+        .alert-error { background:#fee2e2; color:#991b1b; border:1px solid #fecaca; }
+        .alert-warn { background:#fffbeb; color:#92400e; border:1px solid #fde68a; }
+        .alert-success { background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; }
+        .stats-grid { display:grid; grid-template-columns: repeat(3,1fr); gap:12px; margin:12px 0; }
+        .stat-box { background:#fbfdff; border:1px solid #dbe4f0; border-radius:14px; padding:14px; text-align:center; min-width:0; overflow-wrap:anywhere; }
+        .stat-box strong { display:block; font-size:22px; margin-top:4px; word-break:break-word; }
+        .stat-box small { color:#667085; font-weight:600; }
+        .preview-table th { font-size:12px; white-space:nowrap; }
+        .preview-table td { font-size:13px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        /* Success card responsive */
+        .success-layout { width:100%; max-width:720px; margin:0 auto; }
+        .success-stats { display:grid; grid-template-columns: repeat(3,1fr); gap:12px; margin:12px auto; max-width:520px; }
+        /* Tablet: 2 columns */
+        @media(max-width:1024px){
+            .upload-grid { grid-template-columns: repeat(2,1fr); }
+            .stats-grid { grid-template-columns: repeat(2,1fr); }
+            .success-stats { grid-template-columns: repeat(2,1fr); }
+        }
+        /* Mobile: 1 column, full-width controls, stacked buttons */
+        @media(max-width:640px){
+            .upload-grid { grid-template-columns:1fr; }
+            .stats-grid { grid-template-columns:1fr; }
+            .success-stats { grid-template-columns:1fr; }
+            .file-drop { padding:14px; }
+            .actions { flex-direction:column; }
+            .actions .btn { width:100%; }
+        }
+        /* Ensure no horizontal overflow */
+        .card, .main, .dashboard-layout { max-width:100%; overflow-x:hidden; }
+        .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+        #successWarnings, #confirmSummary, #successSummary { overflow-wrap:anywhere; word-break:break-word; }
+    </style>
+</head>
+<body>
+    <div class="dashboard-layout">
+        <aside class="sidebar">
+            <div>
+                <h2>🎓 Result Analysis</h2>
+                <p>Student Portal</p>
+            </div>
+            <nav class="menu"><button id="dashboardBtn">🏠 Dashboard</button><button id="resultBtn">📊 My Result</button><button id="rankBtn">🏆 Rank Analysis</button><button id="logoutBtn">🚪 Logout</button></nav>
+        </aside>
+        <main class="main">
+            <div class="profile-top">
+                <div>
+                    <p class="muted">WELCOME BACK 👋</p>
+                    <h1>Student Dashboard</h1>
+                    <p class="subtitle">Your academic performance at a glance.</p>
+                </div>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                    <button class="btn secondary" id="profileBtn">👤 Profile</button>
+                </div>
+            </div>
+            <section class="card">
+                <h2>Student Details</h2>
+                <div class="detail-grid">
+                    <div class="detail"><small>Name</small><strong id="studentName">Loading...</strong></div>
+                    <div class="detail"><small>USN</small><strong id="studentUSN">Loading...</strong></div>
+                    <div class="detail"><small>Branch</small><strong id="branch">Loading...</strong></div>
+                    <div class="detail"><small>Semester</small><strong id="semester">--</strong></div>
+                    <div class="detail"><small>Academic Year</small><strong id="year">--</strong></div>
+                    <div class="detail"><small>Email</small><strong id="profileEmail">--</strong></div>
+                </div>
+            </section>
+            <section class="summary-grid">
+                <div class="summary"><small>SGPA</small><strong id="sgpa">--</strong></div>
+                <div class="summary"><small>CGPA</small><strong id="cgpa">--</strong></div>
+                <div class="summary"><small>Percentage</small><strong id="percentage">--</strong></div>
+                <div class="summary"><small>Result</small><strong id="result">--</strong></div>
+                <div class="summary"><small>Backlog</small><strong id="backlog">0</strong></div>
+            </section>
+
+            <!-- Upload / Update Student Results — as per spec #4 -->
+            <section class="card" id="uploadCard" style="margin-top:18px;">
+                <h2>📤 Upload / Update Student Results <button id="uploadInfoBtn" title="Upload the semester Excel sheet to add or update student result records. Select the Department, Batch and Semester before uploading." style="background:#eef4ff; border:1px solid #dbe4f0; border-radius:50%; width:28px; height:28px; font-weight:800; color:#1e40af; cursor:pointer; margin-left:8px;">ⓘ</button></h2>
+                <p class="muted" style="margin:6px 0 14px;">For admin/HOD: Select Department, Batch, Semester and Excel file, then preview and confirm to update MySQL. Preview does not write to DB.</p>
+                <div id="uploadHistoryBox" class="alert alert-success hidden" style="margin-bottom:12px;"></div>
+                
+                <div class="upload-grid">
+                    <div class="field"><label for="branchSelect">Department *</label><select id="branchSelect" required><option value="">Select Department</option><option>ECE</option><option>CSE</option><option>ISE</option><option>EEE</option><option>ME</option><option>CV</option></select></div>
+                    <div class="field"><label for="batchSelect">Batch *</label><select id="batchSelect" required><option value="">Select Batch</option><option>2020-2024</option><option>2021-2025</option><option>2022-2026</option><option>2023-2027</option><option>2024-2028</option><option>2025-2029</option><option>2026-2030</option></select></div>
+                    <div class="field"><label for="semesterSelectUpload">Semester *</label><select id="semesterSelectUpload" required><option value="">Select Semester</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option></select></div>
+                    <div class="field"><label for="excelFile">Excel file *</label>
+                        <div class="file-drop" id="dropZone">
+                            <p style="margin:0 0 8px; font-weight:700; font-size:13px;">Drag & drop Excel here or click to browse</p>
+                            <input type="file" id="excelFile" accept=".xlsx,.xls" style="display:none;">
+                            <button class="btn" type="button" id="browseBtn" style="width:100%; max-width:220px;">📂 Browse Excel</button>
+                            <p class="muted" style="margin:10px 0 0; font-size:11px;">Supports .xls (HOD) and .xlsx — preview before import</p>
+                        </div>
+                        <div id="fileInfo" class="alert alert-success hidden" style="margin-top:8px; font-size:13px;">Selected file: <span id="fileName" style="font-weight:700; color:#1e40af; word-break:break-all;">—</span> <span id="fileSize" class="muted"></span> <button type="button" id="clearFile" class="link-btn" style="margin-left:10px;">✕ Remove</button></div>
+                        <div id="fileError" class="alert alert-error hidden"></div>
+                    </div>
+                </div>
+
+                <div class="actions" style="margin-top:14px;">
+                    <button class="btn" id="previewBtn" type="button" disabled>📤 Submit Excel</button>
+                    <span class="muted" style="font-size:13px;">Submit sends file for preview — no MySQL write until Confirm Import</span>
+                </div>
+
+                <!-- Preview -->
+                <div id="previewCard" class="card hidden" style="margin-top:18px; background:#fbfdff;">
+                    <h3>Excel Import Preview</h3>
+                    <div id="previewStatus" class="alert alert-warn">Loading preview...</div>
+                    <div id="previewUploaderInfo" class="alert alert-success hidden" style="margin:12px 0; text-align:left; line-height:1.6;"></div>
+                    <div id="previewMeta" class="hidden">
+                        <div class="stats-grid">
+                            <div class="stat-box"><small>File</small><strong id="p-file" style="font-size:14px; word-break:break-all;">—</strong></div>
+                            <div class="stat-box"><small>Department</small><strong id="p-branch">—</strong></div>
+                            <div class="stat-box"><small>Semester</small><strong id="p-sem">—</strong></div>
+                            <div class="stat-box"><small>Batch</small><strong id="p-batch">—</strong></div>
+                        </div>
+                        <div class="stats-grid">
+                            <div class="stat-box"><small>Students detected</small><strong id="p-students">0</strong></div>
+                            <div class="stat-box"><small>Subjects detected</small><strong id="p-subjects">0</strong></div>
+                            <div class="stat-box"><small>Total rows</small><strong id="p-rows">0</strong></div>
+                        </div>
+                        <div id="errorBox" class="hidden"></div>
+                        <div id="warnBox" class="hidden"></div>
+                        <h4 style="margin:14px 0 8px;">First 5 rows</h4>
+                        <div class="table-wrap"><table class="preview-table"><thead id="previewHead"></thead><tbody id="previewBody"></tbody></table></div>
+                        <div class="actions" style="margin-top:14px;">
+                            <button class="btn secondary" id="editBtn" type="button">✏️ Edit Details</button>
+                            <button class="btn" id="confirmBtn" type="button">Continue to Confirm</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Confirm -->
+                <div id="confirmCard" class="card hidden" style="margin-top:14px; background: linear-gradient(135deg, #fff, #f0fdf4);">
+                    <h3>Confirm Import</h3>
+                    <p id="confirmSummary" style="line-height:1.7;"></p>
+                    <p style="font-weight:700; margin-top:10px;">Do you want to continue? This will write to MySQL transactionally.</p>
+                    <div class="actions" style="justify-content:center; margin-top:12px;">
+                        <button class="btn secondary" id="cancelImport" type="button">Cancel</button>
+                        <button class="btn" id="doImportBtn" type="button">✅ Confirm Import</button>
+                    </div>
+                    <div id="confirmError" class="alert alert-error hidden" style="margin-top:10px;"></div>
+                </div>
+
+                <!-- Success -->
+                <div id="successCard" class="card hidden" style="margin-top:14px; text-align:center; background: linear-gradient(135deg, #fff, #f0fdf4);">
+                    <div style="font-size:40px;">✅</div>
+                    <h3 style="color:#15803d; margin:6px 0;">Import Successful</h3>
+                    <p id="successSummary"></p>
+                    <div class="stats-grid" style="max-width:520px; margin:0 auto 12px;">
+                        <div class="stat-box"><small>Department</small><strong id="s-branch">—</strong></div>
+                        <div class="stat-box"><small>Semester</small><strong id="s-sem">—</strong></div>
+                        <div class="stat-box"><small>Batch</small><strong id="s-batch">—</strong></div>
+                    </div>
+                    <div id="successWarnings" class="alert alert-warn hidden" style="text-align:left;"></div>
+                    <div class="actions" style="justify-content:center;">
+                        <button class="btn secondary" id="importAnotherBtn" type="button">Import Another</button>
+                        <button class="btn" id="refreshAfterImport" type="button">↻ Refresh My Result</button>
+                    </div>
+                </div>
+                <div id="importError" class="alert alert-error hidden"></div>
+            </section>
+
+            <section class="card" id="resultSection" style="margin-top:18px;">
+                <div class="profile-top">
+                    <div>
+                        <h2>Subject-wise Result</h2>
+                        <p class="muted">Semester examination performance</p>
+                    </div><select id="semesterSelect">
+                        <option value="" selected>All Semesters</option>
+                        <option value="1st">Semester 1</option>
+                        <option value="2nd">Semester 2</option>
+                        <option value="3rd">Semester 3</option>
+                        <option value="4th">Semester 4</option>
+                        <option value="5th">Semester 5</option>
+                        <option value="6th">Semester 6</option>
+                        <option value="7th">Semester 7</option>
+                        <option value="8th">Semester 8</option>
+                    </select>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Code</th>
+                                <th>Subject</th>
+                                <th>Credits</th>
+                                <th>Marks</th>
+                                <th>Re</th>
+                                <th>GP</th>
+                                <th>Grade</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultTable">
+                            <tr>
+                                <td colspan="8" class="empty">Loading result...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="config.js"></script>
+    <script src="script_dashboard.js"></script>
+</body>
+</html>

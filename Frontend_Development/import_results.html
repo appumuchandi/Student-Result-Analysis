@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Import Student Excel | Result Analysis</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .import-layout { width: min(1000px, 94%); margin: 22px auto 50px; max-width:100%; box-sizing:border-box; }
+        .step-badge { display:inline-block; background:#eef4ff; color:#1e40af; font-weight:800; font-size:12px; padding:6px 10px; border-radius:999px; letter-spacing:.5px; }
+        /* Responsive upload grid — Department | Batch | Semester | Excel file */
+        .upload-grid { display:grid; grid-template-columns: repeat(4,1fr); gap:16px; margin:14px 0; align-items:end; }
+        .upload-grid .field { min-width:0; }
+        .upload-grid .file-drop { padding:16px; }
+        .file-drop { border:2px dashed #cbd5e1; border-radius:16px; padding:22px; text-align:center; background:#fbfdff; transition:border-color .2s; max-width:100%; overflow:hidden; box-sizing:border-box; }
+        .file-drop.dragover { border-color: var(--primary); background:#eff6ff; }
+        .file-drop p { word-break:break-word; }
+        .file-name { font-weight:700; color:#1e40af; word-break:break-all; }
+        .preview-table th { font-size:12px; white-space:nowrap; }
+        .preview-table td { font-size:13px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .alert { padding:12px 14px; border-radius:12px; font-size:13px; margin:10px 0; word-break:break-word; overflow-wrap:anywhere; }
+        .alert-error { background:#fee2e2; color:#991b1b; border:1px solid #fecaca; }
+        .alert-warn { background:#fffbeb; color:#92400e; border:1px solid #fde68a; }
+        .alert-success { background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; }
+        .stats-grid { display:grid; grid-template-columns: repeat(3,1fr); gap:12px; margin:12px 0; }
+        .stat-box { background:#fbfdff; border:1px solid var(--border); border-radius:14px; padding:14px; text-align:center; min-width:0; overflow-wrap:anywhere; }
+        .stat-box strong { display:block; font-size:22px; margin-top:4px; word-break:break-word; }
+        .stat-box small { color:var(--muted); font-weight:600; }
+        .confirm-box { background: linear-gradient(135deg, #fff, #f0fdf4); border:1px solid #bbf7d0; border-radius:18px; padding:20px; text-align:center; overflow-wrap:anywhere; }
+        .parser-note { font-size:12px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px; margin-top:10px; word-break:break-word; }
+        /* Success page responsive */
+        .success-grid { display:grid; grid-template-columns: repeat(3,1fr); gap:12px; margin:12px auto; max-width:520px; }
+        @media(max-width:1024px){
+            .upload-grid { grid-template-columns: repeat(2,1fr); }
+            .stats-grid { grid-template-columns: repeat(2,1fr); }
+            .success-grid { grid-template-columns: repeat(2,1fr); }
+        }
+        @media(max-width:640px){
+            .upload-grid { grid-template-columns:1fr; }
+            .stats-grid { grid-template-columns:1fr; }
+            .success-grid { grid-template-columns:1fr; }
+            .file-drop { padding:14px; }
+            .actions { flex-direction:column; }
+            .actions .btn, .actions a.btn { width:100%; box-sizing:border-box; text-align:center; }
+        }
+        /* No horizontal overflow */
+        .card, .import-layout { max-width:100%; overflow-x:hidden; box-sizing:border-box; }
+        .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+        #successWarnings, #confirmSummary, #successSummary { overflow-wrap:anywhere; word-break:break-word; }
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <div class="brand">🎓 <span>Result</span> Analysis</div>
+    <nav class="nav">
+        <a href="home.html" class="btn secondary" style="text-decoration:none;">← Home</a>
+        <a href="dashboard.html" class="btn secondary" style="text-decoration:none;">Dashboard</a>
+        <button class="btn secondary" id="logoutBtn" type="button">Logout</button>
+    </nav>
+</header>
+
+<main class="import-layout">
+    <div class="hero" style="margin-bottom:18px;">
+        <div class="icon">📊</div>
+        <h1>Import Student Excel</h1>
+        <p>Upload the HOD's official Excel sheet — preview first, then import safely into MySQL.</p>
+        <div class="parser-note" style="text-align:left; max-width:720px; margin:16px auto 0;">
+            <strong>⚠️ HOD Excel format notice:</strong> The official HOD Excel file has not been provided yet.
+            This page uses a <em>provisional flexible parser</em> (first row = header, USN + Name required, remaining columns = subjects with marks 0-100).
+            The exact mapping will be finalized in <code>ExcelImportService.java:resolveHeaderIndices() / parseProvisionalStudents()</code> once the HOD file is available.
+            For now you can test with the documented provisional format.
+        </div>
+    </div>
+
+    <!-- UPLOAD / UPDATE STUDENT RESULTS — unified responsive form -->
+    <section class="card" id="uploadCard">
+        <span class="step-badge">UPLOAD EXCEL</span>
+        <h2 style="margin:12px 0 6px;">Upload / Update Student Results</h2>
+        <p class="muted" style="margin:0 0 14px;">Select Department, Batch, Semester and Excel file, then preview and confirm to update MySQL. Preview does not write to DB.</p>
+        <div class="upload-grid">
+            <div class="field">
+                <label for="branchSelect">Department *</label>
+                <select id="branchSelect" required>
+                    <option value="">Select Department</option>
+                    <option>ECE</option>
+                    <option>CSE</option>
+                    <option>ISE</option>
+                    <option>EEE</option>
+                    <option>ME</option>
+                    <option>CV</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="batchSelect">Batch *</label>
+                <select id="batchSelect" required>
+                    <option value="">Select Batch</option>
+                    <option>2020-2024</option>
+                    <option>2021-2025</option>
+                    <option>2022-2026</option>
+                    <option>2023-2027</option>
+                    <option>2024-2028</option>
+                    <option>2025-2029</option>
+                    <option>2026-2030</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="semesterSelect">Semester *</label>
+                <select id="semesterSelect" required>
+                    <option value="">Select Semester</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8">8</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="excelFile">Excel file *</label>
+                <div class="file-drop" id="dropZone">
+                    <p style="margin:0 0 8px; font-weight:700; font-size:13px;">Drag & drop Excel here or click to browse</p>
+                    <input type="file" id="excelFile" accept=".xlsx,.xls" style="display:none;">
+                    <button class="btn" type="button" id="browseBtn" style="width:100%; max-width:220px;">📂 Browse Excel</button>
+                    <p class="muted" style="margin:10px 0 0; font-size:11px;">Supports .xls (HOD) and .xlsx — preview before import</p>
+                </div>
+                <div id="fileInfo" class="alert alert-success hidden" style="margin-top:8px; font-size:13px;">
+                    Selected file: <span class="file-name" id="fileName" style="word-break:break-all;">—</span> <span id="fileSize" class="muted"></span>
+                    <button type="button" id="clearFile" class="link-btn" style="margin-left:10px; font-size:13px;">✕ Remove</button>
+                </div>
+                <div id="fileError" class="alert alert-error hidden"></div>
+            </div>
+        </div>
+        <div class="actions" style="margin-top:12px;">
+            <button class="btn" id="previewBtn" type="button" disabled>📤 Submit Excel</button>
+            <span class="muted" style="font-size:13px; align-self:center;">Submit for preview — no MySQL write until Confirm Import</span>
+        </div>
+    </section>
+    <!-- Keep metaCard id for backward compat with JS that may reference it, but hidden -->
+    <section id="metaCard" class="hidden" aria-hidden="true"></section>
+
+    <!-- STEP 4 — PREVIEW -->
+    <section class="card hidden" id="previewCard" style="margin-top:18px;">
+        <span class="step-badge">STEP 4 — PREVIEW</span>
+        <h2 style="margin:12px 0 6px;">Excel Import Preview</h2>
+        <div id="previewStatus" class="alert alert-warn">Loading preview...</div>
+        <div id="previewUploaderInfo" class="alert alert-success hidden" style="margin:12px 0; text-align:left; line-height:1.6;"></div>
+
+        <div id="previewMeta" class="hidden">
+            <div class="stats-grid">
+                <div class="stat-box"><small>File</small><strong id="p-file" style="font-size:14px; word-break:break-all;">—</strong></div>
+                <div class="stat-box"><small>Department</small><strong id="p-branch">—</strong></div>
+                <div class="stat-box"><small>Semester</small><strong id="p-sem">—</strong></div>
+                <div class="stat-box"><small>Batch</small><strong id="p-batch">—</strong></div>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-box"><small>Students detected</small><strong id="p-students">0</strong></div>
+                <div class="stat-box"><small>Subjects detected</small><strong id="p-subjects">0</strong></div>
+                <div class="stat-box"><small>Total rows (excl. header)</small><strong id="p-rows">0</strong></div>
+            </div>
+            <div id="parserNoteBox" class="parser-note hidden"></div>
+            <div id="sheetInfo" class="muted" style="font-size:13px; margin:8px 0;"></div>
+
+            <div id="errorBox" class="hidden"></div>
+            <div id="warnBox" class="hidden"></div>
+
+            <h3 style="margin:18px 0 8px; font-size:16px;">First 5 rows (preview)</h3>
+            <div class="table-wrap" id="previewTableWrap">
+                <table class="preview-table">
+                    <thead id="previewHead"><tr><th>—</th></tr></thead>
+                    <tbody id="previewBody"><tr><td>—</td></tr></tbody>
+                </table>
+            </div>
+
+            <div class="actions" style="margin-top:18px;">
+                <button class="btn secondary" id="editBtn" type="button">✏️ Edit Details</button>
+                <button class="btn" id="confirmBtn" type="button">✅ Continue to Confirmation</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- STEP 6 — CONFIRMATION -->
+    <section class="card hidden" id="confirmCard" style="margin-top:18px; border: 1px solid #bbf7d0; background: linear-gradient(135deg, #fff, #f0fdf4);">
+        <span class="step-badge" style="background:#dcfce7; color:#166534;">STEP 6 — CONFIRM</span>
+        <h2 style="margin:12px 0 6px;">Confirm Import</h2>
+        <div class="confirm-box">
+            <p style="margin:0 0 10px; font-size:15px; font-weight:600;">You are about to import:</p>
+            <p id="confirmSummary" style="margin:0; line-height:1.7; font-size:14px;">
+                Department: —<br>
+                Semester: —<br>
+                Batch: —<br>
+                Students: —<br>
+                Subjects per student: —
+            </p>
+            <p style="margin:14px 0 0; font-weight:700;">Do you want to continue?</p>
+            <div class="actions" style="justify-content:center; margin-top:16px;">
+                <button class="btn secondary" id="cancelImport" type="button">❌ Cancel</button>
+                <button class="btn" id="doImportBtn" type="button">✅ Confirm Import</button>
+            </div>
+            <p class="muted" style="font-size:12px; margin:10px 0 0;">This will write to <strong>students</strong> and <strong>subject_results</strong> transactionally. Duplicate USNs will be skipped.</p>
+        </div>
+        <div id="confirmError" class="alert alert-error hidden" style="margin-top:12px;"></div>
+    </section>
+
+    <!-- STEP 9 — SUCCESS -->
+    <section class="card hidden" id="successCard" style="margin-top:18px; text-align:center; border:1px solid #bbf7d0; background: linear-gradient(135deg, #fff, #f0fdf4);">
+        <div style="font-size:48px;">✅</div>
+        <h2 style="margin:8px 0 6px; color:#15803d;">Import Successful</h2>
+        <p id="successSummary" style="margin:0 0 12px; line-height:1.7;">
+            Students imported: 0<br>
+            Subject results imported: 0
+        </p>
+        <div class="stats-grid" style="max-width:520px; margin:0 auto 16px;">
+            <div class="stat-box"><small>Branch</small><strong id="s-branch">—</strong></div>
+            <div class="stat-box"><small>Semester</small><strong id="s-sem">—</strong></div>
+            <div class="stat-box"><small>Batch</small><strong id="s-batch">—</strong></div>
+        </div>
+        <div id="successWarnings" class="alert alert-warn hidden" style="text-align:left;"></div>
+        <div class="actions" style="justify-content:center;">
+            <a href="dashboard.html" class="btn" style="text-decoration:none;">Go to Dashboard</a>
+            <button class="btn secondary" id="importAnotherBtn" type="button">📊 Import Another Excel</button>
+            <a href="home.html" class="btn secondary" style="text-decoration:none;">← Home</a>
+        </div>
+    </section>
+
+    <div id="importError" class="alert alert-error hidden" style="margin-top:18px;"></div>
+    <div class="footer" style="margin-top:30px;">Secure • Transactional • Preview before import • © 2026 Result Analysis</div>
+</main>
+
+    <script src="config.js"></script>
+    <script src="script_import.js"></script>
+</body>
+</html>

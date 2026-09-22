@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>Rank Analysis | Result Analysis</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .compare-controls { display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; margin:14px 0; }
+        .compare-table th { font-size:12px; }
+        .compare-table td { font-size:13px; }
+        .download-menu { position:relative; display:inline-block; }
+        .download-dropdown { display:none; position:absolute; top:100%; left:0; background:white; border:1px solid #dbe4f0; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,0.12); min-width:200px; z-index:10; overflow:hidden; }
+        .download-dropdown a, .download-dropdown button { display:block; width:100%; text-align:left; padding:12px 16px; border:0; background:white; font-weight:600; cursor:pointer; }
+        .download-dropdown a:hover, .download-dropdown button:hover { background:#eff6ff; }
+        .download-menu.open .download-dropdown { display:block; }
+        .stats-inline { display:flex; gap:12px; flex-wrap:wrap; margin:10px 0; }
+        .stats-inline .summary { flex:1; min-width:140px; }
+        @media(max-width:700px){ .compare-controls { grid-template-columns:1fr; } }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">🏆 <span>Rank</span> Analysis</div>
+        <nav class="nav"><button class="btn secondary" id="backBtn" type="button">← Dashboard</button><button class="btn danger" id="logoutBtn" type="button">Logout</button></nav>
+    </header>
+    <main class="page print-area">
+        <section class="hero">
+            <div class="icon">🏆</div>
+            <h1>Student Rank Analysis</h1>
+            <p>Choose an option below. Only the selected analysis will open.</p>
+        </section>
+        <div class="notice" id="resultStatus">Loading student data...</div>
+        <section class="card rank-actions-card">
+            <h2>Rank Analysis</h2>
+            <p class="muted">Click one button to open that section.</p>
+            <div class="analysis-buttons">
+                <button class="btn" id="topperBtn" type="button">🏆 Topper List</button>
+                <button class="btn" id="rankCompareBtn" type="button">📊 Rank Comparison Graph</button>
+                <button class="btn" id="deptBtn" type="button">🏫 Department-wise Graph</button>
+                <button class="btn secondary" id="statsBtn" type="button">📈 Statistics</button>
+                <div class="download-menu" id="downloadMenu">
+                    <button class="btn" id="downloadToggle" type="button">⬇️ Download ▾</button>
+                    <div class="download-dropdown">
+                        <button id="excelBtnMain" type="button">📄 Excel (.xlsx)</button>
+                        <button id="pdfBtnMain" type="button">📕 PDF (.pdf)</button>
+                    </div>
+                </div>
+            </div>
+            <p class="muted" style="font-size:12px; margin-top:8px;">Download menu: Excel and PDF are generated from MySQL via Apache POI / OpenPDF — genuine files.</p>
+        </section>
+
+        <section class="card analysis-panel hidden" id="topperPanel">
+            <div class="profile-top">
+                <div>
+                    <h2>🏆 Topper List</h2>
+                    <p class="muted">Rank 1 is the student with the highest CGPA.</p>
+                </div><button class="btn secondary closePanel" type="button">← Back to Options</button>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>USN</th>
+                            <th>Name</th>
+                            <th>Department</th>
+                            <th>CGPA</th>
+                            <th>Result</th>
+                            <th>Rank Change</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rankTable"></tbody>
+                </table>
+            </div>
+            <div class="top-student" id="topStudent"></div>
+        </section>
+
+        <section class="card analysis-panel hidden" id="rankComparePanel">
+            <div class="profile-top">
+                <div>
+                    <h2>📊 Rank Comparison Graph</h2>
+                    <p class="muted">Current rank compared with the previous saved ranking.</p>
+                </div><button class="btn secondary closePanel" type="button">← Back to Options</button>
+            </div>
+            <div class="chart-wrap"><canvas id="rankComparisonChart"></canvas></div>
+            <p class="muted chart-note" id="previousNote"></p>
+        </section>
+
+        <section class="card analysis-panel hidden" id="deptPanel">
+            <div class="profile-top">
+                <div>
+                    <h2>🏫 Department-wise Graph</h2>
+                    <p class="muted">Average CGPA of each department.</p>
+                </div><button class="btn secondary closePanel" type="button">← Back to Options</button>
+            </div>
+            <div class="chart-wrap"><canvas id="departmentChart"></canvas></div>
+        </section>
+
+        <section class="card analysis-panel hidden" id="statsPanel">
+            <div class="profile-top">
+                <div>
+                    <h2>📈 Statistics</h2>
+                    <p class="muted">Overall student performance summary.</p>
+                </div><button class="btn secondary closePanel" type="button">← Back to Options</button>
+            </div>
+            <div class="summary-grid" id="rankStats"></div>
+        </section>
+
+        <!-- Subject-wise Batch Comparison — AFTER comparison graphs as per spec #10 -->
+        <section class="card" id="batchCompareSection" style="margin-top:18px;">
+            <div class="profile-top">
+                <div>
+                    <h2>🔬 Subject-wise Batch Comparison</h2>
+                    <p class="muted">Same subject between corresponding students from different batches (e.g., 2KD24EC001 ↔ 2KD23EC001 for BEC401). Difference = Current − Previous.</p>
+                </div>
+            </div>
+            <div class="compare-controls">
+                <div class="field"><label>Current Batch *</label><select id="currentBatchSelect"><option value="">Select Current Batch</option><option>2024-2028</option><option>2023-2027</option><option>2024</option><option>2023</option><option>2025</option><option>2022</option></select></div>
+                <div class="field"><label>Previous/Comparison Batch *</label><select id="previousBatchSelect"><option value="">Select Previous Batch</option><option>2023-2027</option><option>2024-2028</option><option>2023</option><option>2024</option><option>2022</option><option>2025</option></select></div>
+                <div class="field"><label>Branch *</label><select id="compareBranchSelect"><option value="">Select Branch</option><option>ECE</option><option>CSE</option><option>ISE</option><option>EEE</option><option>ME</option><option>CV</option></select></div>
+                <div class="field"><label>Semester *</label><select id="compareSemesterSelect"><option value="">Select Semester</option><option value="3rd">3rd</option><option value="4th">4th</option><option value="1st">1st</option><option value="2nd">2nd</option><option value="5th">5th</option><option value="6th">6th</option><option value="7th">7th</option><option value="8th">8th</option></select></div>
+                <div class="field"><label>Subject *</label><select id="compareSubjectSelect"><option value="">Select Subject</option><option>BEC401</option><option>BEC402</option><option>BEC403</option><option>BECL404</option><option>BEC405A</option><option>BEC456A</option><option>BBOK407</option><option>BUHK408</option><option>BYOK459</option><option>BMATEC301</option><option>BEC302</option><option>BEC303</option><option>BEC304</option><option>BECL305</option><option>BEC306B</option><option>BSCK307</option><option>BEC358A</option><option>BPEK359</option></select></div>
+                <div class="field" style="display:flex; align-items:flex-end;"><button class="btn" id="compareBtn" type="button">🔍 Compare</button></div>
+            </div>
+            <div id="compareStatus" class="notice hidden"></div>
+            <div id="compareSummary" class="stats-inline hidden"></div>
+            <div class="table-wrap" id="compareTableWrap" style="margin-top:12px;">
+                <table class="compare-table">
+                    <thead>
+                        <tr>
+                            <th>Current USN</th>
+                            <th>Previous USN</th>
+                            <th>Subject</th>
+                            <th>Current Marks</th>
+                            <th>Previous Marks</th>
+                            <th>Difference</th>
+                            <th>Re (Cur/Prev)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="compareBody"><tr><td colspan="7" class="empty">Select batches, branch, semester, subject and click Compare. Corresponding students are matched via stable ID (last 3 digits of USN).</td></tr></tbody>
+                </table>
+            </div>
+            <p class="muted" style="font-size:12px; margin-top:8px;">Matched via stable ID (e.g., 001) — not hard-coded 2024→2023. Subject matched by code (e.g., BEC401). Measured data only; faculty will interpret.</p>
+        </section>
+
+    </main>
+    <div class="footer">© 2026 Student Result Analysis System</div>
+    <script src="config.js"></script>
+    <script src="script_Rank_Analysis.js"></script>
+</body>
+</html>
