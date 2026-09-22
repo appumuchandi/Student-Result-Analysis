@@ -1,0 +1,7 @@
+spring.application.name=Result_Analysis
+spring.datasource.url=jdbc:mysql://localhost:3306/result_analysis
+spring.datasource.username=root
+spring.datasource.password=Shahid@786
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+server.port=8081
