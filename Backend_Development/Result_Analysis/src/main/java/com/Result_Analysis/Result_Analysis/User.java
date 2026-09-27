@@ -21,6 +21,12 @@ public class User {
     @Column(nullable = false)
     private String password;
 
+    @Column(length = 20)
+    private String role = "ADMIN"; // ADMIN, HOD, STUDENT
+
+    @Column(name = "must_change_password")
+    private Boolean mustChangePassword = false;
+
     public User() {}
 
     public Long getId() { return id; }
@@ -37,4 +43,10 @@ public class User {
 
     public String getPassword() { return password; }
     public void setPassword(String password) { this.password = password; }
+
+    public String getRole() { return role; }
+    public void setRole(String role) { this.role = role; }
+
+    public Boolean getMustChangePassword() { return mustChangePassword; }
+    public void setMustChangePassword(Boolean mustChangePassword) { this.mustChangePassword = mustChangePassword; }
 }

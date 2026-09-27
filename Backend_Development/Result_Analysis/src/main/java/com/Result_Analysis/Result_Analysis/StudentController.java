@@ -26,11 +26,26 @@ public class StudentController {
     }
 
     @GetMapping 
-    public List<Student> getStudents(){
-        List<Student> students = repository.findAll();
+    public List<Student> getStudents(jakarta.servlet.http.HttpServletRequest request){
+        jakarta.servlet.http.HttpSession session = request.getSession(false);
+        String role = session!=null ? (String)session.getAttribute("AUTH_USER_ROLE") : null;
+        String authUsn = session!=null ? (String)session.getAttribute("AUTH_USER_ID") : null;
+        List<Student> students;
+        if("STUDENT".equalsIgnoreCase(role) && authUsn!=null){
+            // STUDENT: only own record
+            var opt = repository.findByUsnIgnoreCase(authUsn);
+            if(opt.isPresent()){
+                students = List.of(opt.get());
+            } else {
+                students = List.of();
+            }
+        } else {
+            students = repository.findAll();
+        }
         for(Student student : students){
             studentService.calculateStudentData(student);
         }
+        students = new java.util.ArrayList<>(students);
         students.sort((a, b) -> {
             Double cgpaA = a.getCgpa();
             Double cgpaB = b.getCgpa();
@@ -52,11 +67,36 @@ public class StudentController {
     }
 
     @GetMapping("/usn/{usn}")
-    public ResponseEntity<Student> getByUsn(@PathVariable String usn,@RequestParam String collegeCode,@RequestParam String branch){
-        return repository.findByUsnAndCollegeCodeAndBranch(usn, collegeCode, branch).map(student -> {
-            studentService.calculateStudentData(student);
-            return ResponseEntity.ok(student);
-        }) .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<Student> getByUsn(@PathVariable String usn,@RequestParam(required=false) String collegeCode,@RequestParam(required=false) String branch, jakarta.servlet.http.HttpServletRequest request){
+        // Student result security: STUDENT role may only access own USN
+        jakarta.servlet.http.HttpSession session = request.getSession(false);
+        if(session!=null){
+            Object roleObj = session.getAttribute("AUTH_USER_ROLE");
+            Object uidObj = session.getAttribute("AUTH_USER_ID");
+            if(roleObj!=null && "STUDENT".equalsIgnoreCase(roleObj.toString())){
+                String authUsn = uidObj!=null?uidObj.toString().trim().toUpperCase():null;
+                if(authUsn!=null && !authUsn.equalsIgnoreCase(usn.trim())){
+                    return ResponseEntity.status(403).build();
+                }
+            }
+        }
+        // Try exact match first (when both provided)
+        if(collegeCode!=null && branch!=null && !collegeCode.trim().isEmpty() && !branch.trim().isEmpty()){
+            var exact = repository.findByUsnAndCollegeCodeAndBranch(usn, collegeCode, branch);
+            if(exact.isPresent()){
+                Student s = exact.get();
+                studentService.calculateStudentData(s);
+                // Do not expose password hashes
+                return ResponseEntity.ok(s);
+            }
+        }
+        var byUsn = repository.findByUsnIgnoreCase(usn);
+        if(byUsn.isPresent()){
+            Student s = byUsn.get();
+            studentService.calculateStudentData(s);
+            return ResponseEntity.ok(s);
+        }
+        return ResponseEntity.notFound().build();
     }
 
     @GetMapping("/{id}")
@@ -74,7 +114,7 @@ public class StudentController {
     public ResponseEntity<Student> update(@PathVariable Long id,@RequestBody Student details){
         return repository.findById(id).map(s->{
             s.setUsn(details.getUsn()); s.setName(details.getName()); s.setBranch(details.getBranch());
-            s.setSemester(details.getSemester()); s.setAcademicYear(details.getAcademicYear()); s.setEmail(details.getEmail());
+            s.setSemester(details.getSemester()); s.setAcademicYear(details.getAcademicYear()); s.setEmail(details.getEmail()); s.setPhoneNumber(details.getPhoneNumber());
             s.setSgpa(details.getSgpa()); s.setCgpa(details.getCgpa()); s.setPercentage(details.getPercentage()); s.setResult(details.getResult());
             s.setLateralEntry(details.getLateralEntry());
             s.setCollegeCode(details.getCollegeCode());

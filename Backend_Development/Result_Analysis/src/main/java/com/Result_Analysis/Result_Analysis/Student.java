@@ -27,6 +27,8 @@ public class Student {
     private String semester;
     private String academicYear;
     private String email;
+    @Column(name="phone_number")
+    private String phoneNumber;
     private Double sgpa;
     private Double cgpa;
     private Double percentage;
@@ -80,5 +82,13 @@ public Integer getBacklog(){
 
  public void setLateralEntry(Boolean lateralEntry){
      this.lateralEntry = lateralEntry;
- }
+  }
+
+ public String getPhoneNumber(){
+     return phoneNumber;
+  }
+
+ public void setPhoneNumber(String phoneNumber){
+     this.phoneNumber = phoneNumber;
+  }
 }

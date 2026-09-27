@@ -21,7 +21,21 @@ public class ExcelExportController {
             @RequestParam(required = false) String semester,
             @RequestParam(required = false) String branch,
             @RequestParam(required = false) Boolean lateralEntry,
-            @RequestParam(required = false) String collegeCode) {
+            @RequestParam(required = false) String collegeCode,
+            jakarta.servlet.http.HttpServletRequest request) {
+        jakarta.servlet.http.HttpSession session = request.getSession(false);
+        String role = session!=null ? (String)session.getAttribute("AUTH_USER_ROLE") : null;
+        String authUsn = session!=null ? (String)session.getAttribute("AUTH_USER_ID") : null;
+        if("STUDENT".equalsIgnoreCase(role) && authUsn!=null){
+            // STUDENT: export only own
+            byte[] data = excelExportService.generateExcelForStudent(authUsn, semester);
+            String filename = "My_Result_" + authUsn + ".xlsx";
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                    .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                    .contentLength(data.length)
+                    .body(data);
+        }
 
         // collegeCode filtering is not strongly required but we support it via branch lateral combination
         // For collegeCode we filter in service if needed; pass through generic logic

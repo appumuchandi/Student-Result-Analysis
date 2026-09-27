@@ -78,6 +78,30 @@ public class ExcelExportService {
         return generateExcel(filtered);
     }
 
+    @Transactional(readOnly = true)
+    public byte[] generateExcelForStudent(String usn, String semester) {
+        var opt = studentRepository.findByUsnIgnoreCase(usn);
+        if(opt.isEmpty()) return generateExcel(List.of());
+        Student s = opt.get();
+        s.getResults().size();
+        // If semester filter provided, filter results to that semester
+        if(semester!=null && !semester.trim().isEmpty()){
+            String filterNorm = normalizeSemester(semester);
+            List<SubjectResult> filtered = new ArrayList<>();
+            for(SubjectResult sr : s.getResults()){
+                if(filterNorm.equals(normalizeSemester(sr.getSemester()))) filtered.add(sr);
+            }
+            // Create a shallow copy with filtered results for export
+            Student copy = new Student();
+            copy.setId(s.getId()); copy.setUsn(s.getUsn()); copy.setName(s.getName());
+            copy.setBranch(s.getBranch()); copy.setSemester(s.getSemester()); copy.setAcademicYear(s.getAcademicYear());
+            copy.setCollegeCode(s.getCollegeCode()); copy.setEmail(s.getEmail()); copy.setPhoneNumber(s.getPhoneNumber());
+            copy.setResults(filtered);
+            return generateExcel(List.of(copy));
+        }
+        return generateExcel(List.of(s));
+    }
+
     private List<Student> filterStudents(List<Student> all, String semester, String branch, Boolean lateralEntry) {
         List<Student> filtered = new ArrayList<>();
         for (Student s : all) {

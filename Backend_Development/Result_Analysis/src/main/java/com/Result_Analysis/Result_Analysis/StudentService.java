@@ -1,7 +1,9 @@
 package com.Result_Analysis.Result_Analysis;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
@@ -161,19 +163,33 @@ public class StudentService {
     }
 
     public double calculateCGPA(Student student) {
-        int latestSemester = getLatestCompletedSemester(student);
-
-        if (latestSemester < 2) return 0.0;
-
-        int previousSemester = latestSemester - 1;
-
-        double latestSGPA =
-                getSGPAForSemester(student, latestSemester);
-
-        double previousSGPA =
-                getSGPAForSemester(student, previousSemester);
-
-        return roundTwoDecimals((latestSGPA + previousSGPA) / 2.0);
+        if (student == null || student.getResults() == null || student.getResults().isEmpty()) return 0.0;
+        // Credit-weighted cumulative CGPA: Σ(semester SGPA × semester credits) / Σ(semester credits)
+        // Uses only actual available results — missing semesters are ignored, not treated as 0.
+        Map<Integer, List<SubjectResult>> bySem = new java.util.HashMap<>();
+        for (SubjectResult sr : student.getResults()) {
+            int semNum = getSemesterNumber(sr.getSemester());
+            if (semNum == 0) continue;
+            bySem.computeIfAbsent(semNum, k -> new ArrayList<>()).add(sr);
+        }
+        if (bySem.isEmpty()) return 0.0;
+        if (bySem.size() == 1) {
+            // Single semester: CGPA equals that semester's SGPA
+            List<SubjectResult> only = bySem.values().iterator().next();
+            return calculateSemesterSGPA(only);
+        }
+        double totalWeighted = 0;
+        int totalCredits = 0;
+        for (List<SubjectResult> semResults : bySem.values()) {
+            double sgpa = calculateSemesterSGPA(semResults);
+            int semCredits = semResults.stream().mapToInt(sr -> sr.getCredits() != null ? sr.getCredits() : 0).sum();
+            // If credits missing, fallback to count-based weight
+            if (semCredits == 0) semCredits = semResults.size() * 4;
+            totalWeighted += sgpa * semCredits;
+            totalCredits += semCredits;
+        }
+        if (totalCredits == 0) return 0.0;
+        return roundTwoDecimals(totalWeighted / totalCredits);
     }
 
     public String calculateOverallResult(Student student) {

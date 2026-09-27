@@ -9,6 +9,17 @@ function generateCaptcha() {
 }
 generateCaptcha();
 document.getElementById('refreshCaptcha').addEventListener('click', generateCaptcha);
+// HOD-only import card
+(async()=>{
+    const card=document.getElementById('hodImportCard');
+    if(!card) return;
+    try{
+        const r=await fetch(`${API_BASE}/api/auth/me`, {credentials:'include'});
+        if(!r.ok) return;
+        const d=await r.json();
+        if((d.role||'').toUpperCase()==='HOD') card.classList.remove('hidden');
+    }catch(e){}
+})();
 document.getElementById('studentForm').addEventListener('submit', async e => {
     e.preventDefault();
     const collegeCode = document.getElementById('collegeCode').value.trim();

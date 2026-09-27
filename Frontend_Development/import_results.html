@@ -6,8 +6,8 @@
     <title>Import Student Excel | Result Analysis</title>
     <link rel="stylesheet" href="styles.css">
     <style>
-        .import-layout { width: min(1000px, 94%); margin: 22px auto 50px; max-width:100%; box-sizing:border-box; }
-        .step-badge { display:inline-block; background:#eef4ff; color:#1e40af; font-weight:800; font-size:12px; padding:6px 10px; border-radius:999px; letter-spacing:.5px; }
+        .import-layout { width: min(1000px, 94%); margin: 12px auto 24px; max-width:100%; box-sizing:border-box; }
+        .step-badge { display:inline-block; background:#eef4ff; color:#1e40af; font-weight:800; font-size:11px; padding:4px 8px; border-radius:999px; letter-spacing:.5px; }
         /* Responsive upload grid — Department | Batch | Semester | Excel file */
         .upload-grid { display:grid; grid-template-columns: repeat(4,1fr); gap:16px; margin:14px 0; align-items:end; }
         .upload-grid .field { min-width:0; }
@@ -60,23 +60,17 @@
 </header>
 
 <main class="import-layout">
-    <div class="hero" style="margin-bottom:18px;">
-        <div class="icon">📊</div>
-        <h1>Import Student Excel</h1>
-        <p>Upload the HOD's official Excel sheet — preview first, then import safely into MySQL.</p>
-        <div class="parser-note" style="text-align:left; max-width:720px; margin:16px auto 0;">
-            <strong>⚠️ HOD Excel format notice:</strong> The official HOD Excel file has not been provided yet.
-            This page uses a <em>provisional flexible parser</em> (first row = header, USN + Name required, remaining columns = subjects with marks 0-100).
-            The exact mapping will be finalized in <code>ExcelImportService.java:resolveHeaderIndices() / parseProvisionalStudents()</code> once the HOD file is available.
-            For now you can test with the documented provisional format.
-        </div>
+    <div class="hero" style="margin-bottom:14px; padding:12px 0;">
+        <div class="icon" style="font-size:32px;">📊</div>
+        <h1 style="font-size:clamp(22px,3.5vw,28px); margin:6px 0 4px;">Import Student Excel</h1>
+        <p style="margin:0; font-size:13px;">Upload the official HOD Excel sheet to preview and update student results.</p>
     </div>
 
     <!-- UPLOAD / UPDATE STUDENT RESULTS — unified responsive form -->
     <section class="card" id="uploadCard">
         <span class="step-badge">UPLOAD EXCEL</span>
         <h2 style="margin:12px 0 6px;">Upload / Update Student Results</h2>
-        <p class="muted" style="margin:0 0 14px;">Select Department, Batch, Semester and Excel file, then preview and confirm to update MySQL. Preview does not write to DB.</p>
+        <p class="muted" style="margin:0 0 14px;">Upload the official HOD Excel sheet to preview and update student results.</p>
         <div class="upload-grid">
             <div class="field">
                 <label for="branchSelect">Department *</label>
@@ -133,16 +127,15 @@
             </div>
         </div>
         <div class="actions" style="margin-top:12px;">
-            <button class="btn" id="previewBtn" type="button" disabled>📤 Submit Excel</button>
-            <span class="muted" style="font-size:13px; align-self:center;">Submit for preview — no MySQL write until Confirm Import</span>
-        </div>
+                <button class="btn" id="previewBtn" type="button" disabled>📤 Submit Excel</button>
+            </div>
     </section>
     <!-- Keep metaCard id for backward compat with JS that may reference it, but hidden -->
     <section id="metaCard" class="hidden" aria-hidden="true"></section>
 
-    <!-- STEP 4 — PREVIEW -->
+    <!-- PREVIEW -->
     <section class="card hidden" id="previewCard" style="margin-top:18px;">
-        <span class="step-badge">STEP 4 — PREVIEW</span>
+        <span class="step-badge">PREVIEW</span>
         <h2 style="margin:12px 0 6px;">Excel Import Preview</h2>
         <div id="previewStatus" class="alert alert-warn">Loading preview...</div>
         <div id="previewUploaderInfo" class="alert alert-success hidden" style="margin:12px 0; text-align:left; line-height:1.6;"></div>
@@ -158,6 +151,18 @@
                 <div class="stat-box"><small>Students detected</small><strong id="p-students">0</strong></div>
                 <div class="stat-box"><small>Subjects detected</small><strong id="p-subjects">0</strong></div>
                 <div class="stat-box"><small>Total rows (excl. header)</small><strong id="p-rows">0</strong></div>
+            </div>
+            <div id="syncPreviewBox" class="alert alert-success hidden" style="text-align:left; line-height:1.7;"></div>
+            <div id="syncPreviewGrid" class="stats-grid hidden" style="margin-top:8px;">
+                <div class="stat-box"><small>New Students</small><strong id="p-newStudents">0</strong></div>
+                <div class="stat-box"><small>Existing Students</small><strong id="p-existingStudents">0</strong></div>
+                <div class="stat-box"><small>Students With Changes</small><strong id="p-studentsWithChanges">0</strong></div>
+                <div class="stat-box"><small>Already Up To Date</small><strong id="p-studentsUnchanged">0</strong></div>
+                <div class="stat-box"><small>New Subject Results</small><strong id="p-newSubjects">0</strong></div>
+                <div class="stat-box"><small>Subject To Update</small><strong id="p-subjectToUpdate">0</strong></div>
+                <div class="stat-box"><small>Subject Already Up To Date</small><strong id="p-subjectUnchanged">0</strong></div>
+                <div class="stat-box"><small>Invalid Rows</small><strong id="p-invalidRows">0</strong></div>
+                <div class="stat-box"><small>Duplicate Rows</small><strong id="p-duplicateRows">0</strong></div>
             </div>
             <div id="parserNoteBox" class="parser-note hidden"></div>
             <div id="sheetInfo" class="muted" style="font-size:13px; margin:8px 0;"></div>
@@ -180,9 +185,9 @@
         </div>
     </section>
 
-    <!-- STEP 6 — CONFIRMATION -->
+    <!-- CONFIRMATION -->
     <section class="card hidden" id="confirmCard" style="margin-top:18px; border: 1px solid #bbf7d0; background: linear-gradient(135deg, #fff, #f0fdf4);">
-        <span class="step-badge" style="background:#dcfce7; color:#166534;">STEP 6 — CONFIRM</span>
+        <span class="step-badge" style="background:#dcfce7; color:#166534;">CONFIRM</span>
         <h2 style="margin:12px 0 6px;">Confirm Import</h2>
         <div class="confirm-box">
             <p style="margin:0 0 10px; font-size:15px; font-weight:600;">You are about to import:</p>
@@ -193,17 +198,17 @@
                 Students: —<br>
                 Subjects per student: —
             </p>
-            <p style="margin:14px 0 0; font-weight:700;">Do you want to continue?</p>
+            <p style="margin:14px 0 0; font-weight:700;">Do you want to continue? This will update records transactionally.</p>
             <div class="actions" style="justify-content:center; margin-top:16px;">
                 <button class="btn secondary" id="cancelImport" type="button">❌ Cancel</button>
                 <button class="btn" id="doImportBtn" type="button">✅ Confirm Import</button>
             </div>
-            <p class="muted" style="font-size:12px; margin:10px 0 0;">This will write to <strong>students</strong> and <strong>subject_results</strong> transactionally. Duplicate USNs will be skipped.</p>
+            <p class="muted" style="font-size:12px; margin:10px 0 0;">Duplicate USNs will be skipped.</p>
         </div>
         <div id="confirmError" class="alert alert-error hidden" style="margin-top:12px;"></div>
     </section>
 
-    <!-- STEP 9 — SUCCESS -->
+    <!-- SUCCESS -->
     <section class="card hidden" id="successCard" style="margin-top:18px; text-align:center; border:1px solid #bbf7d0; background: linear-gradient(135deg, #fff, #f0fdf4);">
         <div style="font-size:48px;">✅</div>
         <h2 style="margin:8px 0 6px; color:#15803d;">Import Successful</h2>
@@ -216,6 +221,17 @@
             <div class="stat-box"><small>Semester</small><strong id="s-sem">—</strong></div>
             <div class="stat-box"><small>Batch</small><strong id="s-batch">—</strong></div>
         </div>
+        <div id="successSyncGrid" class="stats-grid hidden" style="max-width:640px; margin:0 auto 12px;">
+            <div class="stat-box"><small>Students New</small><strong id="s-new">0</strong></div>
+            <div class="stat-box"><small>Students Updated</small><strong id="s-updated">0</strong></div>
+            <div class="stat-box"><small>Students Unchanged</small><strong id="s-unchanged">0</strong></div>
+            <div class="stat-box"><small>Subject Inserted</small><strong id="s-subInserted">0</strong></div>
+            <div class="stat-box"><small>Subject Updated</small><strong id="s-subUpdated">0</strong></div>
+            <div class="stat-box"><small>Subject Unchanged</small><strong id="s-subUnchanged">0</strong></div>
+            <div class="stat-box"><small>Skipped Rows</small><strong id="s-skipped">0</strong></div>
+            <div class="stat-box"><small>Duplicate Rows</small><strong id="s-dupRows">0</strong></div>
+        </div>
+        <div id="successSyncBox" class="alert alert-success hidden" style="text-align:left; line-height:1.7;"></div>
         <div id="successWarnings" class="alert alert-warn hidden" style="text-align:left;"></div>
         <div class="actions" style="justify-content:center;">
             <a href="dashboard.html" class="btn" style="text-decoration:none;">Go to Dashboard</a>

@@ -11,6 +11,24 @@ const show = (el, yes) => {
     else el.classList.add('hidden');
 };
 
+// HOD-only check: hide upload if not HOD
+(async()=>{
+    try{
+        const r=await fetch(`${API_BASE}/api/auth/me`, {credentials:'include'});
+        if(!r.ok) throw new Error('no auth');
+        const d=await r.json();
+        const role=(d.role||'').toUpperCase();
+        if(role!=='HOD'){
+            const card=document.getElementById('uploadCard');
+            if(card) card.innerHTML='<div class="alert alert-warn">Excel result upload is restricted to HOD. Your role: '+role+'</div>';
+            const previewBtn=document.getElementById('previewBtn');
+            if(previewBtn) previewBtn.disabled=true;
+        }
+    }catch(e){
+        const card=document.getElementById('uploadCard');
+        if(card) card.innerHTML='<div class="alert alert-error">Not authenticated. Please login as HOD to upload.</div>';
+    }
+})();
 // Logout — also invalidates server session
 if ($('logoutBtn')) $('logoutBtn').addEventListener('click', async () => {
     try { await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' }); } catch(e){}
@@ -213,6 +231,31 @@ function renderPreview(d) {
     $('p-students').textContent = d.studentsDetected ?? 0;
     $('p-subjects').textContent = d.subjectsDetected ?? 0;
     $('p-rows').textContent = d.totalRows ?? 0;
+
+    // Sync preview (18.7)
+    const syncBox=$('syncPreviewBox');
+    const syncGrid=$('syncPreviewGrid');
+    if(syncBox && syncGrid){
+        const ns=d.newStudents??0, es=d.existingStudents??0, swc=d.studentsWithChanges??0, sau=d.studentsAlreadyUpToDate??0;
+        const nsr=d.newSubjectResults??0, stu=d.subjectResultsToUpdate??0, sau2=d.subjectResultsAlreadyUpToDate??0;
+        const ir=d.invalidRows??0, dr=d.duplicateRowsWithinFile??0;
+        const setIf=(id,v)=>{ const e=$(id); if(e) e.textContent=v; };
+        setIf('p-newStudents', ns); setIf('p-existingStudents', es); setIf('p-studentsWithChanges', swc); setIf('p-studentsUnchanged', sau);
+        setIf('p-newSubjects', nsr); setIf('p-subjectToUpdate', stu); setIf('p-subjectUnchanged', sau2);
+        setIf('p-invalidRows', ir); setIf('p-duplicateRows', dr);
+        let summary='';
+        if(ns===0 && swc===0 && nsr===0 && stu===0 && es>0){
+            summary='<strong>Already uploaded — no changes detected.</strong><br>Existing Students: '+es+' already up to date. No new or changed subject results.';
+        } else {
+            summary='<strong>Preview Summary</strong><br>'+
+                'New Students: '+ns+' | Existing Students: '+es+' | With Changes: '+swc+' | Already Up To Date: '+sau+'<br>'+
+                'New Subject Results: '+nsr+' | To Update: '+stu+' | Already Up To Date: '+sau2+'<br>'+
+                'Invalid Rows: '+ir+' | Duplicate Rows Within File: '+dr;
+        }
+        syncBox.innerHTML=summary;
+        syncBox.classList.remove('hidden');
+        syncGrid.classList.remove('hidden');
+    }
 
     const sheetInfo = $('sheetInfo');
     if (sheetInfo) sheetInfo.textContent = 'Sheets: ' + (d.sheetNames ? d.sheetNames.join(', ') : '—') + ' | Headers: ' + (d.headers ? d.headers.join(' | ') : '—');
@@ -421,10 +464,37 @@ function showSuccess(data) {
     const sSem = $('s-sem');
     const sBatch = $('s-batch');
     const warnEl = $('successWarnings');
-    if (summary) summary.innerHTML = `Students imported: <strong>${data.studentsImported ?? 0}</strong><br>Subject results imported: <strong>${data.subjectResultsImported ?? 0}</strong><br><span class="muted">${escapeHtml(data.message || '')}</span>`;
+    const syncGrid=$('successSyncGrid');
+    const syncBox=$('successSyncBox');
+    const sn=data.studentsNew??0, su=data.studentsUpdated??0, sun=data.studentsUnchanged??0;
+    const si=data.subjectResultsInserted??0, siu=data.subjectResultsUpdated??0, siun=data.subjectResultsUnchanged??0;
+    const sk=data.skippedRows??0, dup=data.duplicateRowsWithinFile??0;
+    let msgHtml='';
+    if(data.message && data.message.includes('Already uploaded')){
+        msgHtml=`<strong>${escapeHtml(data.message)}</strong>`;
+    } else if(sn===0 && su===0 && sun>0){
+        msgHtml='<strong>Already uploaded — no changes detected.</strong><br>Students already up to date: '+sun;
+    } else {
+        msgHtml=`Import completed successfully.<br>Students — New: <strong>${sn}</strong> | Updated: <strong>${su}</strong> | Unchanged: <strong>${sun}</strong><br>Subject Results — Inserted: <strong>${si}</strong> | Updated: <strong>${siu}</strong> | Unchanged: <strong>${siun}</strong>`;
+        if(sk>0 || dup>0) msgHtml+=`<br>Skipped/Invalid Rows: <strong>${sk}</strong> | Duplicate Rows: <strong>${dup}</strong>`;
+    }
+    if (summary) summary.innerHTML = msgHtml + (data.message && !data.message.includes('Already uploaded') && !msgHtml.includes(data.message) ? `<br><span class="muted">${escapeHtml(data.message)}</span>` : '');
     if (sBranch) sBranch.textContent = data.branch || '—';
     if (sSem) sSem.textContent = data.semester || '—';
     if (sBatch) sBatch.textContent = data.batch || '—';
+    if(syncGrid){
+        const setIf=(id,v)=>{ const e=$(id); if(e) e.textContent=v; };
+        setIf('s-new', sn); setIf('s-updated', su); setIf('s-unchanged', sun);
+        setIf('s-subInserted', si); setIf('s-subUpdated', siu); setIf('s-subUnchanged', siun);
+        setIf('s-skipped', sk); setIf('s-dupRows', dup);
+        syncGrid.classList.remove('hidden');
+    }
+    if(syncBox){
+        if(sn===0 && su===0 && sun>0) syncBox.innerHTML='No duplicate SubjectResult records were created. All records already up to date.';
+        else if(si>0 || siu>0) syncBox.innerHTML='No duplicate SubjectResult records were created.';
+        else syncBox.innerHTML='';
+        if(syncBox.innerHTML) syncBox.classList.remove('hidden'); else syncBox.classList.add('hidden');
+    }
     if (warnEl) {
         if (data.errors && data.errors.length) {
             warnEl.innerHTML = '<strong>⚠️ Some rows were skipped:</strong><ul style="margin:6px 0 0; padding-left:18px;">' + data.errors.map(e => `<li>${escapeHtml(e)}</li>`).join('') + '</ul>';

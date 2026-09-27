@@ -1,6 +1,7 @@
 package com.Result_Analysis.Result_Analysis;
 
 import org.apache.poi.ss.usermodel.*;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -13,6 +14,13 @@ import java.util.*;
  * HOD format: Regular sheet, row4 main header with subject codes merged across 5 cols, row5 sub Int/Ext/Tot/Re/GP,
  * data from row6, 9 subjects (BEC401 etc. for 4th, BMATEC301 etc. for 3rd), each subject 5 cols.
  * Re preserved as P/A, Tot as marks, Int/Ext/GP stored in SubjectResult.
+ *
+ * UPDATE/SYNC semantics (18.x):
+ * - USN is stable identity for Student
+ * - USN + semester + subject code is identity for SubjectResult
+ * - Existing student: compare incoming vs DB, update only changed fields
+ * - Existing subject: compare marks/int/ext/re/gp, update if changed, count unchanged otherwise
+ * - No duplicate SubjectResult creation, preserve previous semesters
  */
 @Service
 public class ExcelImportService {
@@ -20,11 +28,16 @@ public class ExcelImportService {
     private final StudentRepository studentRepository;
     private final StudentService studentService;
     private final ExcelUploadHistoryRepository uploadHistoryRepository;
+    private final UserRepository userRepository;
+    private final CreditResolver creditResolver;
+    private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
-    public ExcelImportService(StudentRepository studentRepository, StudentService studentService, ExcelUploadHistoryRepository uploadHistoryRepository) {
+    public ExcelImportService(StudentRepository studentRepository, StudentService studentService, ExcelUploadHistoryRepository uploadHistoryRepository, UserRepository userRepository, CreditResolver creditResolver) {
         this.studentRepository = studentRepository;
         this.studentService = studentService;
         this.uploadHistoryRepository = uploadHistoryRepository;
+        this.userRepository = userRepository;
+        this.creditResolver = creditResolver;
     }
 
     private static class SubjectGroup {
@@ -80,7 +93,6 @@ public class ExcelImportService {
         if(isBlank(branch)) errors.add("Department is required.");
         if(isBlank(semester)) errors.add("Semester is required.");
         if(isBlank(batch)) errors.add("Batch is required.");
-        // Entry Type removed — lateral is detected per-student from file data if available, otherwise defaults to existing/false
         if(file==null||file.isEmpty()) errors.add("Excel file is required.");
         else {
             String fname=file.getOriginalFilename()!=null?file.getOriginalFilename().toLowerCase():"";
@@ -104,6 +116,10 @@ public class ExcelImportService {
             int totalRows=0, studentsDetected=0, subjectsDetected=0;
             Set<String> seenUsnInFile=new HashSet<>(); List<String> duplicateUsnsInFile=new ArrayList<>();
             int missingUsnCount=0, missingNameCount=0, invalidMarksCount=0;
+            // Sync counters
+            int newStudents=0, existingStudents=0, studentsWithChanges=0, studentsAlreadyUpToDate=0;
+            int newSubjectResults=0, subjectResultsToUpdate=0, subjectResultsAlreadyUpToDate=0;
+            int invalidRows=0, duplicateRowsWithinFile=0;
 
             if(isHod){
                 List<SubjectGroup> groups=extractHodSubjectGroups(sheet);
@@ -124,27 +140,113 @@ public class ExcelImportService {
                     rowMap.put("USN",usnVal); rowMap.put("Student Name",nameVal);
                     for(SubjectGroup g: groups) rowMap.put(g.code+" ("+g.name+") Tot", getCellString(row.getCell(g.totCol)));
                     if(previewRows.size()<5) previewRows.add(rowMap);
-                    if(isBlank(usnVal)) missingUsnCount++;
-                    else {
-                        String norm=usnVal.trim().toUpperCase();
-                        if(!seenUsnInFile.add(norm) && !duplicateUsnsInFile.contains(norm)) duplicateUsnsInFile.add(norm);
-                        studentsDetected++;
+
+                    // Invalid row detection
+                    if(isBlank(usnVal) || isBlank(nameVal)){
+                        invalidRows++;
+                        if(isBlank(usnVal)) missingUsnCount++;
+                        if(isBlank(nameVal)) missingNameCount++;
+                        continue;
                     }
-                    if(isBlank(nameVal)) missingNameCount++;
+                    String norm=usnVal.trim().toUpperCase();
+                    if(seenUsnInFile.contains(norm)){
+                        if(!duplicateUsnsInFile.contains(norm)) duplicateUsnsInFile.add(norm);
+                        duplicateRowsWithinFile++;
+                        continue;
+                    }
+                    seenUsnInFile.add(norm);
+                    studentsDetected++;
+
+                    // Check subject marks validity for warnings
                     for(SubjectGroup g: groups){
                         String totStr=getCellString(row.getCell(g.totCol)).trim();
                         if(isBlank(totStr)) continue;
                         try{ int tot=parseMarks(totStr); if(tot<0||tot>100) invalidMarksCount++; }catch(NumberFormatException e){ invalidMarksCount++; }
                     }
+
+                    // Sync detection vs DB
+                    Optional<Student> existingOpt = studentRepository.findByUsnIgnoreCase(norm);
+                    if(!existingOpt.isPresent()){
+                        newStudents++;
+                        // All subject results for new student are new
+                        for(SubjectGroup g: groups){
+                            String totStr=getCellString(row.getCell(g.totCol)).trim();
+                            String intStr=getCellString(row.getCell(g.intCol)).trim();
+                            String extStr=getCellString(row.getCell(g.extCol)).trim();
+                            if(isBlank(totStr)&&isBlank(intStr)&&isBlank(extStr)) continue;
+                            // Validate tot exists and is parsable
+                            try{
+                                Integer tot = isBlank(totStr)?null:parseMarks(totStr);
+                                if(tot!=null) newSubjectResults++;
+                            }catch(Exception e){}
+                        }
+                    } else {
+                        existingStudents++;
+                        Student existing = existingOpt.get();
+                        existing.getResults().size(); // init
+                        // Check student fields change - HOD has no email/phone columns, preserve existing
+                        String incomingBranch = branch;
+                        String incomingAcad = batch;
+                        String incomingSem = semester;
+                        String incomingCollege = isBlank(collegeCode)?null:collegeCode.trim();
+                        String incomingEmail = null;
+                        String incomingPhone = null;
+                        Boolean incomingLateral = detectLateralFromRow(row, null, norm, existing);
+                        boolean studentChanged = isStudentChanged(existing, nameVal, incomingBranch, incomingSem, incomingAcad, incomingCollege, incomingEmail, incomingPhone, incomingLateral);
+
+                        int rowNew=0, rowUpd=0, rowUnchanged=0;
+                        for(SubjectGroup g: groups){
+                            String intStr=getCellString(row.getCell(g.intCol)).trim();
+                            String extStr=getCellString(row.getCell(g.extCol)).trim();
+                            String totStr=getCellString(row.getCell(g.totCol)).trim();
+                            String reStr=getCellString(row.getCell(g.reCol)).trim();
+                            String gpStr=getCellString(row.getCell(g.gpCol)).trim();
+                            if(isBlank(totStr)&&isBlank(intStr)&&isBlank(extStr)) continue;
+                            Integer tot=null, intM=null, extM=null, gp=null;
+                            try{
+                                if(!isBlank(totStr)) tot=parseMarks(totStr);
+                                if(!isBlank(intStr)) intM=parseMarks(intStr);
+                                if(!isBlank(extStr)) extM=parseMarks(extStr);
+                                if(!isBlank(gpStr)) gp=parseMarks(gpStr);
+                            }catch(Exception e){ continue; }
+                            if(tot==null) continue;
+                            SubjectResult existingSr = findExistingSubject(existing, g.code, semester);
+                            if(existingSr==null){
+                                rowNew++;
+                            } else {
+                                String incomingRe = isBlank(reStr)?null:reStr.trim().toUpperCase();
+                                if(isSubjectSame(existingSr, tot, intM, extM, incomingRe, gp, g.name)){
+                                    rowUnchanged++;
+                                } else {
+                                    rowUpd++;
+                                }
+                            }
+                        }
+                        newSubjectResults += rowNew;
+                        subjectResultsToUpdate += rowUpd;
+                        subjectResultsAlreadyUpToDate += rowUnchanged;
+                        if(studentChanged || rowNew>0 || rowUpd>0){
+                            studentsWithChanges++;
+                        } else {
+                            studentsAlreadyUpToDate++;
+                        }
+                    }
                 }
                 resp.setTotalRows(totalRows); resp.setStudentsDetected(studentsDetected); resp.setPreviewRows(previewRows); resp.setSubjectsDetected(subjectsDetected);
+                // Set sync counters
+                resp.setNewStudents(newStudents); resp.setExistingStudents(existingStudents);
+                resp.setStudentsWithChanges(studentsWithChanges); resp.setStudentsAlreadyUpToDate(studentsAlreadyUpToDate);
+                resp.setNewSubjectResults(newSubjectResults); resp.setSubjectResultsToUpdate(subjectResultsToUpdate);
+                resp.setSubjectResultsAlreadyUpToDate(subjectResultsAlreadyUpToDate);
+                resp.setInvalidRows(invalidRows); resp.setDuplicateRowsWithinFile(duplicateRowsWithinFile);
+
                 if(totalRows==0) errors.add("No data rows found in Regular sheet. Ensure HOD file contains student records starting at row 7.");
                 if(subjectsDetected==0) warnings.add("No subject columns detected in HOD format.");
                 if(missingUsnCount>0) warnings.add(missingUsnCount+" record(s) have missing USN.");
                 if(missingNameCount>0) warnings.add(missingNameCount+" record(s) have missing student name.");
                 if(!duplicateUsnsInFile.isEmpty()) warnings.add(duplicateUsnsInFile.size()+" duplicate USN(s) within file: "+String.join(", ",duplicateUsnsInFile));
                 if(invalidMarksCount>0) warnings.add(invalidMarksCount+" subject Tot values have invalid marks (0-100).");
-                // no DB check in preview for HOD to keep stable
+                if(invalidRows>0) warnings.add(invalidRows+" invalid row(s) will be skipped.");
             } else {
                 int headerRowNum=findHeaderRow(sheet);
                 if(headerRowNum<0){
@@ -173,36 +275,99 @@ public class ExcelImportService {
                     if(previewRows.size()<5) previewRows.add(rowMap);
                     String usnVal=usnIdx!=null?getCellString(row.getCell(usnIdx)):"";
                     String nameVal=colIndex.containsKey("name")?getCellString(row.getCell(colIndex.get("name"))):"";
-                    if(isBlank(usnVal)) missingUsnCount++;
-                    else {
-                        String norm=usnVal.trim().toUpperCase();
-                        if(!seenUsnInFile.add(norm) && !duplicateUsnsInFile.contains(norm)) duplicateUsnsInFile.add(norm);
-                        studentsDetected++;
+                    if(isBlank(usnVal) || isBlank(nameVal)){
+                        invalidRows++;
+                        if(isBlank(usnVal)) missingUsnCount++;
+                        if(isBlank(nameVal)) missingNameCount++;
+                        continue;
                     }
-                    if(isBlank(nameVal)) missingNameCount++;
+                    String norm=usnVal.trim().toUpperCase();
+                    if(seenUsnInFile.contains(norm)){
+                        if(!duplicateUsnsInFile.contains(norm)) duplicateUsnsInFile.add(norm);
+                        duplicateRowsWithinFile++;
+                        continue;
+                    }
+                    seenUsnInFile.add(norm);
+                    studentsDetected++;
                     for(Integer sIdx: subjectIndices){
                         String marksStr=getCellString(row.getCell(sIdx)).trim();
                         if(isBlank(marksStr)) continue;
                         try{ int m=parseMarks(marksStr); if(m<0||m>100) invalidMarksCount++; }catch(Exception e){ invalidMarksCount++; }
                     }
+                    // Sync detection
+                    Optional<Student> existingOpt = studentRepository.findByUsnIgnoreCase(norm);
+                    if(!existingOpt.isPresent()){
+                        newStudents++;
+                        newSubjectResults += subjectIndices.size(); // approx, will filter blanks later
+                        // More precise: count non-blank marks
+                        int cnt=0;
+                        for(Integer sIdx: subjectIndices){
+                            String ms=getCellString(row.getCell(sIdx)).trim();
+                            if(!isBlank(ms)){
+                                try{ parseMarks(ms); cnt++; }catch(Exception e){}
+                            }
+                        }
+                        // Adjust: we added size, now correct
+                        newSubjectResults = newSubjectResults - subjectIndices.size() + cnt;
+                    } else {
+                        existingStudents++;
+                        Student existing = existingOpt.get();
+                        existing.getResults().size();
+                        String branchVal = colIndex.containsKey("branch")?getCellString(row.getCell(colIndex.get("branch"))).trim():branch;
+                        if(isBlank(branchVal)) branchVal = branch;
+                        String semVal = colIndex.containsKey("semester")?getCellString(row.getCell(colIndex.get("semester"))).trim():semester;
+                        if(isBlank(semVal)) semVal = semester;
+                        String acadVal = colIndex.containsKey("academic year")?getCellString(row.getCell(colIndex.get("academic year"))).trim():batch;
+                        if(isBlank(acadVal)) acadVal = batch;
+                        String ccVal = colIndex.containsKey("college code")?getCellString(row.getCell(colIndex.get("college code"))).trim():collegeCode;
+                        String emailVal = null;
+                        if(colIndex.containsKey("email")){
+                            String ev = getCellString(row.getCell(colIndex.get("email"))).trim();
+                            if(!isBlank(ev)) emailVal = ev;
+                        }
+                        String phoneVal = null;
+                        if(colIndex.containsKey("phone")){
+                            String pv = getCellString(row.getCell(colIndex.get("phone"))).trim();
+                            if(!isBlank(pv)) phoneVal = pv;
+                        }
+                        Boolean lat = detectLateralFromRow(row, colIndex, norm, existing);
+                        boolean studentChanged = isStudentChanged(existing, nameVal, branchVal, semVal, acadVal, ccVal, emailVal, phoneVal, lat);
+                        int rowNew=0,rowUpd=0,rowUnchanged=0;
+                        for(Integer sIdx: subjectIndices){
+                            String header=headers.get(sIdx);
+                            String marksStr=getCellString(row.getCell(sIdx)).trim();
+                            if(isBlank(marksStr)) continue;
+                            int marks;
+                            try{ marks=parseMarks(marksStr); }catch(Exception e){ continue; }
+                            String code=header.contains(":")?header.split(":",2)[0].trim():header;
+                            SubjectResult existingSr = findExistingSubject(existing, code, semVal);
+                            if(existingSr==null) rowNew++;
+                            else {
+                                if(existingSr.getMarks()!=null && existingSr.getMarks()==marks) rowUnchanged++;
+                                else rowUpd++;
+                            }
+                        }
+                        newSubjectResults += rowNew;
+                        subjectResultsToUpdate += rowUpd;
+                        subjectResultsAlreadyUpToDate += rowUnchanged;
+                        if(studentChanged || rowNew>0 || rowUpd>0) studentsWithChanges++;
+                        else studentsAlreadyUpToDate++;
+                    }
                 }
                 resp.setTotalRows(totalRows); resp.setStudentsDetected(studentsDetected); resp.setPreviewRows(previewRows);
+                resp.setNewStudents(newStudents); resp.setExistingStudents(existingStudents);
+                resp.setStudentsWithChanges(studentsWithChanges); resp.setStudentsAlreadyUpToDate(studentsAlreadyUpToDate);
+                resp.setNewSubjectResults(newSubjectResults); resp.setSubjectResultsToUpdate(subjectResultsToUpdate);
+                resp.setSubjectResultsAlreadyUpToDate(subjectResultsAlreadyUpToDate);
+                resp.setInvalidRows(invalidRows); resp.setDuplicateRowsWithinFile(duplicateRowsWithinFile);
+
                 if(totalRows==0) errors.add("No data rows found below header.");
                 if(subjectIndices.isEmpty()) warnings.add("No subject columns detected.");
                 if(missingUsnCount>0) warnings.add(missingUsnCount+" record(s) have missing USN.");
                 if(missingNameCount>0) warnings.add(missingNameCount+" record(s) have missing student name.");
                 if(!duplicateUsnsInFile.isEmpty()) warnings.add(duplicateUsnsInFile.size()+" duplicate USN(s) within file: "+String.join(", ",duplicateUsnsInFile));
                 if(invalidMarksCount>0) warnings.add(invalidMarksCount+" record(s) have invalid marks (must be 0-100 integer).");
-                if(hasUsn && totalRows>0){
-                    long dupVsDb=0; Set<String> checked=new HashSet<>();
-                    for(int r=headerRowNum+1;r<=sheet.getLastRowNum();r++){
-                        Row row=sheet.getRow(r); if(row==null||isRowEmpty(row)) continue;
-                        String usnVal=getCellString(row.getCell(usnIdx)).trim().toUpperCase();
-                        if(isBlank(usnVal)||!checked.add(usnVal)) continue;
-                        if(studentRepository.findByUsnIgnoreCase(usnVal).isPresent()) dupVsDb++;
-                    }
-                    if(dupVsDb>0) warnings.add(dupVsDb+" USN(s) already exist in database and will be skipped on import.");
-                }
+                if(invalidRows>0) warnings.add(invalidRows+" invalid row(s) will be skipped.");
             }
             finalizePreview(resp,errors,warnings);
             return resp;
@@ -221,7 +386,6 @@ public class ExcelImportService {
     @Transactional
     public ImportResultResponse importConfirm(MultipartFile file, String branch, String semester,
                                               String batch, String entryType, String collegeCode) throws Exception {
-        // Overload for backward compat (no uploadedBy) — delegates to main with anonymous
         return importConfirm(file, branch, semester, batch, entryType, collegeCode, "unknown");
     }
 
@@ -234,7 +398,6 @@ public class ExcelImportService {
         if(isBlank(branch)) errors.add("Department is required.");
         if(isBlank(semester)) errors.add("Semester is required.");
         if(isBlank(batch)) errors.add("Batch is required.");
-        // Entry Type removed — lateral is detected per-student from file data if available, otherwise preserved/default
         if(file==null||file.isEmpty()) errors.add("Excel file is required.");
         else {
             String fname=file.getOriginalFilename()!=null?file.getOriginalFilename().toLowerCase():"";
@@ -244,17 +407,14 @@ public class ExcelImportService {
             result.setSuccess(false); result.setMessage("Validation failed. No records were imported."); result.setErrors(errors);
             result.setStudentsImported(0); result.setSubjectResultsImported(0); return result;
         }
-        // Lateral detection: HOD sheets contain both Regular and Lateral in same file without explicit marker.
-        // We preserve existing student's lateral value if updating, otherwise default to Regular (false).
-        // If workbook has an explicit lateral column, it would be detected here via header "lateral" — not present in HOD, so defaults.
-        // See report limitation.
         int studentsImported=0, subjectResultsImported=0, studentsUpdated=0;
+        int studentsNew=0, studentsUnchanged=0, subjectResultsInserted=0, subjectResultsUpdated=0, subjectResultsUnchanged=0, skippedRows=0, duplicateRowsWithinFile=0;
+        List<Student> toSaveNew=new ArrayList<>();
+        Set<String> seenUsnInFile=new HashSet<>();
         try (InputStream is=file.getInputStream(); Workbook wb=WorkbookFactory.create(is)){
             Sheet sheet=chooseSheet(wb);
             if(sheet==null) throw new RuntimeException("No sheets found in workbook.");
             boolean isHod=isHodFormat(sheet);
-            Set<String> seenUsnInFile=new HashSet<>();
-            List<Student> toSaveNew=new ArrayList<>();
 
             if(isHod){
                 List<SubjectGroup> groups=extractHodSubjectGroups(sheet);
@@ -265,31 +425,46 @@ public class ExcelImportService {
                     String usnVal=getCellString(row.getCell(1)).trim().toUpperCase();
                     String nameVal=getCellString(row.getCell(2)).trim();
                     if(isBlank(usnVal)&&isBlank(nameVal)) continue;
-                    if(isBlank(usnVal)){ errors.add("Row "+(r+1)+": Missing USN - skipped."); continue; }
-                    if(isBlank(nameVal)){ errors.add("Row "+(r+1)+" (USN "+usnVal+"): Missing student name - skipped."); continue; }
+                    if(isBlank(usnVal)){ errors.add("Row "+(r+1)+": Missing USN - skipped."); skippedRows++; continue; }
+                    if(isBlank(nameVal)){ errors.add("Row "+(r+1)+" (USN "+usnVal+"): Missing student name - skipped."); skippedRows++; continue; }
                     String normUsn=usnVal.toUpperCase();
-                    if(!seenUsnInFile.add(normUsn)){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Duplicate USN within file - skipped."); continue; }
+                    if(!seenUsnInFile.add(normUsn)){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Duplicate USN within file - skipped."); duplicateRowsWithinFile++; continue; }
                     Optional<Student> existingOpt=studentRepository.findByUsnIgnoreCase(normUsn);
-                    Student student; boolean isNew;
-                    // Lateral detection per student: if workbook has lateral column, use it; else preserve existing or default Regular
-                    // HOD sheets contain both Regular and Lateral in same file without explicit marker → keep existing or false
+                    Student student; boolean isNew=false;
                     Boolean lateralForRow = detectLateralFromRow(row, null, normUsn, existingOpt.orElse(null));
+                    boolean studentChanged=false;
                     if(existingOpt.isPresent()){
-                        student=existingOpt.get(); student.getResults().size(); isNew=false;
-                        if(isBlank(student.getBranch())) student.setBranch(branch);
-                        if(isBlank(student.getAcademicYear())) student.setAcademicYear(batch);
-                        if(isBlank(student.getCollegeCode())&&!isBlank(collegeCode)) student.setCollegeCode(collegeCode.trim());
-                        if(student.getLateralEntry()==null && lateralForRow!=null) student.setLateralEntry(lateralForRow);
-                        else if(student.getLateralEntry()==null) student.setLateralEntry(false);
+                        student=existingOpt.get(); student.getResults().size();
+                        // Detect and apply student field changes — preserve existing email/phone if incoming blank (HOD has no contact columns)
+                        String incomingBranch = branch;
+                        String incomingAcad = batch;
+                        String incomingSem = semester;
+                        String incomingCollege = isBlank(collegeCode)?null:collegeCode.trim();
+                        String incomingEmail = null;
+                        String incomingPhone = null;
+                        // Check changes
+                        if(!equalsTrim(student.getName(), nameVal)) { student.setName(nameVal); studentChanged=true; }
+                        if(!equalsTrim(student.getBranch(), incomingBranch)) { student.setBranch(incomingBranch); studentChanged=true; }
+                        if(!equalsTrim(student.getSemester(), incomingSem)) { student.setSemester(incomingSem); studentChanged=true; }
+                        if(!equalsTrim(student.getAcademicYear(), incomingAcad)) { student.setAcademicYear(incomingAcad); studentChanged=true; }
+                        if(!equalsTrim(student.getCollegeCode(), incomingCollege) && !isBlank(incomingCollege)) { student.setCollegeCode(incomingCollege); studentChanged=true; }
+                        if(!isBlank(incomingEmail) && !equalsTrim(student.getEmail(), incomingEmail)) { student.setEmail(incomingEmail); studentChanged=true; }
+                        if(!isBlank(incomingPhone) && !equalsTrim(student.getPhoneNumber(), incomingPhone)) { student.setPhoneNumber(incomingPhone); studentChanged=true; }
+                        if(lateralForRow!=null && !Objects.equals(student.getLateralEntry(), lateralForRow)) { student.setLateralEntry(lateralForRow); studentChanged=true; }
+                        isNew=false;
                     } else {
                         student=new Student(); student.setUsn(normUsn); student.setName(nameVal);
                         student.setBranch(branch); student.setSemester(semester); student.setAcademicYear(batch);
                         student.setCollegeCode(!isBlank(collegeCode)?collegeCode.trim():null);
                         student.setEmail(normUsn.toLowerCase()+"@example.com");
+                        student.setPhoneNumber(null);
                         student.setLateralEntry(lateralForRow!=null ? lateralForRow : false);
                         isNew=true;
+                        // Create student login account (USN + phone as initial password) — phone may be missing for HOD, then warn
+                        ensureStudentAccount(normUsn, nameVal, null, errors, errors);
                     }
-                    List<SubjectResult> newResults=new ArrayList<>();
+                    int rowInserted=0, rowUpdated=0, rowUnchanged=0;
+                    List<SubjectResult> toInsert=new ArrayList<>();
                     for(SubjectGroup g: groups){
                         String intStr=getCellString(row.getCell(g.intCol)).trim();
                         String extStr=getCellString(row.getCell(g.extCol)).trim();
@@ -304,41 +479,106 @@ public class ExcelImportService {
                             if(!isBlank(extStr)) extM=parseMarks(extStr);
                             if(!isBlank(gpStr)) gp=parseMarks(gpStr);
                         }catch(NumberFormatException e){
-                            errors.add("Row "+(r+1)+" (USN "+normUsn+"): Invalid numeric for subject '"+g.code+"' Int="+intStr+" Ext="+extStr+" Tot="+totStr+" GP="+gpStr+" - skipped subject."); continue;
+                            errors.add("Row "+(r+1)+" (USN "+normUsn+"): Invalid numeric for subject '"+g.code+"' Int="+intStr+" Ext="+extStr+" Tot="+totStr+" GP="+gpStr+" - skipped subject."); skippedRows++; continue;
                         }
                         if(tot!=null && (tot<0||tot>100)){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Tot "+tot+" out of range 0-100 for subject '"+g.code+"' - skipped subject."); continue; }
                         if(tot==null){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Missing Tot for subject '"+g.code+"' - skipped subject."); continue; }
-                        boolean alreadyExists=false;
-                        if(!isNew){
-                            for(SubjectResult ex: student.getResults()){
-                                if(ex.getCode()!=null && ex.getCode().equalsIgnoreCase(g.code) && ex.getSemester()!=null && ex.getSemester().equalsIgnoreCase(semester)){ alreadyExists=true; break; }
+                        SubjectResult existingSr = isNew?null:findExistingSubject(student, g.code, semester);
+                        if(existingSr==null){
+                            // Check duplicate within newResults for new student
+                            boolean dupInNew=false;
+                            for(SubjectResult nr: toInsert){ if(nr.getCode().equalsIgnoreCase(g.code) && nr.getSemester().equalsIgnoreCase(semester)){ dupInNew=true; break; } }
+                            if(dupInNew){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Duplicate SubjectResult for "+g.code+" semester "+semester+" within file - skipped subject."); continue; }
+                            var creditOpt = creditResolver.resolveCredit(semester, g.code);
+                            if(creditOpt.isEmpty()){
+                                // Unknown subject — report but use fallback 4 to preserve import (not inventing official value)
+                                errors.add("Row "+(r+1)+" (USN "+normUsn+"): Unknown subject code '"+g.code+"' semester "+semester+" — no official credit mapping, using fallback 4.");
                             }
+                            int credits = creditOpt.orElse(4);
+                            SubjectResult sr=new SubjectResult();
+                            sr.setCode(g.code); sr.setSubject(g.name); sr.setCredits(credits); sr.setMarks(tot);
+                            sr.setInternalMarks(intM); sr.setExternalMarks(extM); sr.setRe(!isBlank(reStr)?reStr.trim().toUpperCase():null); sr.setGradePoint(gp);
+                            sr.setSemester(semester); sr.setStudent(student);
+                            toInsert.add(sr); rowInserted++;
                         } else {
-                            for(SubjectResult nr: newResults){ if(nr.getCode().equalsIgnoreCase(g.code) && nr.getSemester().equalsIgnoreCase(semester)){ alreadyExists=true; break; } }
+                            String incomingRe = isBlank(reStr)?null:reStr.trim().toUpperCase();
+                            if(isSubjectSame(existingSr, tot, intM, extM, incomingRe, gp, g.name)){
+                                rowUnchanged++;
+                            } else {
+                                existingSr.setMarks(tot); existingSr.setInternalMarks(intM); existingSr.setExternalMarks(extM);
+                                existingSr.setRe(incomingRe); existingSr.setGradePoint(gp); existingSr.setSubject(g.name);
+                                // Update credits if official mapping exists and differs
+                                var creditOpt2 = creditResolver.resolveCredit(semester, g.code);
+                                if(creditOpt2.isPresent() && !creditOpt2.get().equals(existingSr.getCredits())){
+                                    existingSr.setCredits(creditOpt2.get());
+                                }
+                                rowUpdated++;
+                            }
                         }
-                        if(alreadyExists){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Duplicate SubjectResult for "+g.code+" semester "+semester+" - skipped subject."); continue; }
-                        SubjectResult sr=new SubjectResult();
-                        sr.setCode(g.code); sr.setSubject(g.name); sr.setCredits(4); sr.setMarks(tot);
-                        sr.setInternalMarks(intM); sr.setExternalMarks(extM); sr.setRe(!isBlank(reStr)?reStr.trim().toUpperCase():null); sr.setGradePoint(gp);
-                        sr.setSemester(semester); sr.setStudent(student);
-                        newResults.add(sr);
                     }
-                    if(newResults.isEmpty()){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): No valid subject marks found - skipped student."); continue; }
-                    for(SubjectResult nr: newResults) student.getResults().add(nr);
+                    if(toInsert.isEmpty() && rowUpdated==0 && rowUnchanged==0){
+                        // No valid subjects at all
+                        errors.add("Row "+(r+1)+" (USN "+normUsn+"): No valid subject marks found - skipped student."); skippedRows++;
+                        // revert student changes if it was existing and we changed fields but no subjects? Keep changes? For now revert not needed
+                        continue;
+                    }
+                    // If student is existing and no subject changes and no student field changes → unchanged
+                    boolean hasSubjectChanges = rowInserted>0 || rowUpdated>0;
+                    boolean isStudentUnchanged = !isNew && !studentChanged && !hasSubjectChanges && rowUnchanged>0;
+                    for(SubjectResult nr: toInsert) student.getResults().add(nr);
                     studentService.calculateStudentData(student);
-                    if(isNew){ toSaveNew.add(student); studentsImported++; subjectResultsImported+=newResults.size(); }
-                    else { studentRepository.save(student); studentsUpdated++; subjectResultsImported+=newResults.size(); studentsImported++; }
+                    if(isNew){
+                        toSaveNew.add(student); studentsNew++; studentsImported++;
+                        subjectResultsInserted+=rowInserted;
+                        subjectResultsUnchanged+=rowUnchanged;
+                        subjectResultsImported+=rowInserted+rowUpdated;
+                        // For new student, updated is 0
+                    } else {
+                        if(isStudentUnchanged){
+                            studentsUnchanged++; 
+                            // still need to save? No changes, but we may have not changed anything, avoid save
+                        } else {
+                            // studentChanged or subject changes
+                            if(studentChanged || hasSubjectChanges){
+                                studentRepository.save(student);
+                                if(rowInserted==0 && rowUpdated==0 && studentChanged){
+                                    // Only student fields changed
+                                    studentsUpdated++;
+                                } else if(hasSubjectChanges || studentChanged){
+                                    studentsUpdated++;
+                                }
+                            } else {
+                                studentsUnchanged++;
+                            }
+                            studentsImported++; // counts as processed
+                        }
+                        subjectResultsInserted+=rowInserted;
+                        subjectResultsUpdated+=rowUpdated;
+                        subjectResultsUnchanged+=rowUnchanged;
+                        subjectResultsImported+=rowInserted+rowUpdated;
+                    }
                 }
-                if(studentsImported==0 && studentsUpdated==0){
+                // Handle all unchanged case
+                int totalProcessed = studentsNew + studentsUpdated + studentsUnchanged;
+                if(totalProcessed==0){
                     result.setSuccess(false); result.setMessage("No valid records to import. All rows had errors. No records were added."); result.setErrors(errors);
                     result.setStudentsImported(0); result.setSubjectResultsImported(0); return result;
                 }
                 for(Student s: toSaveNew) studentRepository.save(s);
                 studentRepository.flush();
-                result.setSuccess(true); result.setMessage("Import successful. New: "+toSaveNew.size()+", Updated: "+studentsUpdated);
+                // Build message with sync semantics
+                String msg;
+                if(studentsNew==0 && studentsUpdated==0 && studentsUnchanged>0){
+                    msg = "Already uploaded — no changes detected. Students already up to date: "+studentsUnchanged;
+                } else {
+                    msg = "Import completed successfully. New: "+studentsNew+", Updated: "+studentsUpdated+", Unchanged: "+studentsUnchanged;
+                }
+                result.setSuccess(true); result.setMessage(msg);
                 result.setStudentsImported(studentsImported); result.setSubjectResultsImported(subjectResultsImported);
+                result.setStudentsNew(studentsNew); result.setStudentsUpdated(studentsUpdated); result.setStudentsUnchanged(studentsUnchanged);
+                result.setSubjectResultsInserted(subjectResultsInserted); result.setSubjectResultsUpdated(subjectResultsUpdated); result.setSubjectResultsUnchanged(subjectResultsUnchanged);
+                result.setSkippedRows(skippedRows); result.setDuplicateRowsWithinFile(duplicateRowsWithinFile);
                 result.setErrors(errors.isEmpty()?Collections.emptyList():errors);
-                // Record upload history — MySQL source of truth, not localStorage
                 try {
                     ExcelUploadHistory h = new ExcelUploadHistory();
                     h.setUploadedBy(uploadedBy != null && !uploadedBy.trim().isEmpty() ? uploadedBy : "unknown");
@@ -354,6 +594,7 @@ public class ExcelImportService {
                 } catch(Exception ex){ ex.printStackTrace(); }
                 return result;
             } else {
+                // Generic fallback
                 int headerRowNum=findHeaderRow(sheet);
                 if(headerRowNum<0) throw new RuntimeException("Header row not found.");
                 Row headerRow=sheet.getRow(headerRowNum);
@@ -364,7 +605,7 @@ public class ExcelImportService {
                 if(!colIndex.containsKey("name")) throw new RuntimeException("Name column not found. Required header: Name");
                 if(subjectIndices.isEmpty()) throw new RuntimeException("No subject columns detected.");
                 Integer usnIdx=colIndex.get("usn"); Integer nameIdx=colIndex.get("name");
-                Integer branchIdx=colIndex.get("branch"); Integer emailIdx=colIndex.get("email");
+                Integer branchIdx=colIndex.get("branch"); Integer emailIdx=colIndex.get("email"); Integer phoneIdx=colIndex.get("phone");
                 Integer semIdx=colIndex.get("semester"); Integer acadYearIdx=colIndex.containsKey("academic year")?colIndex.get("academic year"):colIndex.get("batch");
                 Integer collegeCodeIdx=colIndex.get("college code");
                 List<Student> toSaveNewFallback=new ArrayList<>();
@@ -373,33 +614,51 @@ public class ExcelImportService {
                     if(row==null||isRowEmpty(row)) continue;
                     String usnVal=getCellString(row.getCell(usnIdx)).trim().toUpperCase();
                     String nameVal=getCellString(row.getCell(nameIdx)).trim();
-                    if(isBlank(usnVal)){ errors.add("Row "+(r+1)+": Missing USN - skipped."); continue; }
-                    if(isBlank(nameVal)){ errors.add("Row "+(r+1)+" (USN "+usnVal+"): Missing student name - skipped."); continue; }
+                    if(isBlank(usnVal)){ errors.add("Row "+(r+1)+": Missing USN - skipped."); skippedRows++; continue; }
+                    if(isBlank(nameVal)){ errors.add("Row "+(r+1)+" (USN "+usnVal+"): Missing student name - skipped."); skippedRows++; continue; }
                     String normUsn=usnVal.toUpperCase();
-                    if(!seenUsnInFile.add(normUsn)){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Duplicate USN within file - skipped."); continue; }
+                    if(!seenUsnInFile.add(normUsn)){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Duplicate USN within file - skipped."); duplicateRowsWithinFile++; continue; }
                     Optional<Student> existingOpt=studentRepository.findByUsnIgnoreCase(normUsn);
-                    Student student; boolean isNew;
+                    Student student; boolean isNew=false;
                     Boolean lateralForRowGeneric = detectLateralFromRow(row, colIndex, normUsn, existingOpt.orElse(null));
+                    String branchVal = branchIdx!=null?getCellString(row.getCell(branchIdx)).trim():"";
+                    String useBranch = !isBlank(branchVal)?branchVal:branch;
+                    String semVal = semIdx!=null?getCellString(row.getCell(semIdx)).trim():"";
+                    String useSem = !isBlank(semVal)?semVal:semester;
+                    String acadVal = acadYearIdx!=null?getCellString(row.getCell(acadYearIdx)).trim():"";
+                    String useAcad = !isBlank(acadVal)?acadVal:batch;
+                    String ccVal = collegeCodeIdx!=null?getCellString(row.getCell(collegeCodeIdx)).trim():"";
+                    String useCC = !isBlank(ccVal)?ccVal:(collegeCode!=null?collegeCode.trim():null);
+                    String emailValRaw=emailIdx!=null?getCellString(row.getCell(emailIdx)).trim():null;
+                    String useEmail = null;
+                    if(!isBlank(emailValRaw) && emailValRaw.contains("@")) useEmail = emailValRaw.trim();
+                    else if(!isBlank(emailValRaw)) useEmail = emailValRaw.trim();
+                    String phoneValRaw=phoneIdx!=null?getCellString(row.getCell(phoneIdx)).trim():null;
+                    String usePhone = isBlank(phoneValRaw)?null:phoneValRaw.trim();
+                    boolean studentChanged=false;
                     if(existingOpt.isPresent()){
-                        student=existingOpt.get(); student.getResults().size(); isNew=false;
-                        if(student.getLateralEntry()==null && lateralForRowGeneric!=null) student.setLateralEntry(lateralForRowGeneric);
-                        else if(student.getLateralEntry()==null) student.setLateralEntry(false);
+                        student=existingOpt.get(); student.getResults().size();
+                        if(!equalsTrim(student.getName(), nameVal)) { student.setName(nameVal); studentChanged=true; }
+                        if(!equalsTrim(student.getBranch(), useBranch)) { student.setBranch(useBranch); studentChanged=true; }
+                        if(!equalsTrim(student.getSemester(), useSem)) { student.setSemester(useSem); studentChanged=true; }
+                        if(!equalsTrim(student.getAcademicYear(), useAcad)) { student.setAcademicYear(useAcad); studentChanged=true; }
+                        if(!equalsTrim(student.getCollegeCode(), useCC) && !isBlank(useCC)) { student.setCollegeCode(useCC); studentChanged=true; }
+                        if(!isBlank(useEmail) && !equalsTrim(student.getEmail(), useEmail)) { student.setEmail(useEmail); studentChanged=true; }
+                        if(!isBlank(usePhone) && !equalsTrim(student.getPhoneNumber(), usePhone)) { student.setPhoneNumber(usePhone); studentChanged=true; }
+                        if(lateralForRowGeneric!=null && !Objects.equals(student.getLateralEntry(), lateralForRowGeneric)) { student.setLateralEntry(lateralForRowGeneric); studentChanged=true; }
+                        isNew=false;
                     } else {
                         student=new Student(); student.setUsn(normUsn); student.setName(nameVal);
-                        String branchVal=branchIdx!=null?getCellString(row.getCell(branchIdx)).trim():"";
-                        student.setBranch(!isBlank(branchVal)?branchVal:branch);
-                        String semVal=semIdx!=null?getCellString(row.getCell(semIdx)).trim():"";
-                        student.setSemester(!isBlank(semVal)?semVal:semester);
-                        String acadVal=acadYearIdx!=null?getCellString(row.getCell(acadYearIdx)).trim():"";
-                        student.setAcademicYear(!isBlank(acadVal)?acadVal:batch);
-                        String ccVal=collegeCodeIdx!=null?getCellString(row.getCell(collegeCodeIdx)).trim():"";
-                        student.setCollegeCode(!isBlank(ccVal)?ccVal:(collegeCode!=null?collegeCode.trim():null));
-                        String emailVal=emailIdx!=null?getCellString(row.getCell(emailIdx)).trim():"";
-                        if(!isBlank(emailVal)&&emailVal.contains("@")) student.setEmail(emailVal); else student.setEmail(normUsn.toLowerCase()+"@example.com");
+                        student.setBranch(useBranch); student.setSemester(useSem); student.setAcademicYear(useAcad);
+                        student.setCollegeCode(useCC);
+                        student.setEmail(!isBlank(useEmail)?useEmail:normUsn.toLowerCase()+"@example.com");
+                        student.setPhoneNumber(usePhone);
                         student.setLateralEntry(lateralForRowGeneric!=null ? lateralForRowGeneric : false);
                         isNew=true;
+                        ensureStudentAccount(normUsn, nameVal, usePhone, errors, errors);
                     }
-                    List<SubjectResult> newResults=new ArrayList<>();
+                    int rowInserted=0,rowUpdated=0,rowUnchanged=0;
+                    List<SubjectResult> toInsert=new ArrayList<>();
                     for(Integer sIdx: subjectIndices){
                         String header=headers.get(sIdx);
                         String marksStr=getCellString(row.getCell(sIdx)).trim();
@@ -408,33 +667,75 @@ public class ExcelImportService {
                             errors.add("Row "+(r+1)+" (USN "+normUsn+"): Invalid marks '"+marksStr+"' for subject '"+header+"' - skipped subject."); continue;
                         }
                         if(marks<0||marks>100){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Marks "+marks+" out of range 0-100 for subject '"+header+"' - skipped subject."); continue; }
-                        boolean alreadyExists=false;
-                        if(!isNew){
-                            for(SubjectResult ex: student.getResults()){
-                                if(ex.getCode()!=null&&ex.getCode().equalsIgnoreCase(header)&&ex.getSemester()!=null&&ex.getSemester().equalsIgnoreCase(student.getSemester())){ alreadyExists=true; break; }
+                        String code=header.contains(":")?header.split(":",2)[0].trim():header;
+                        String subject=header.contains(":")?header.split(":",2)[1].trim():header;
+                        if(isBlank(subject)) subject=code;
+                        SubjectResult existingSr = isNew?null:findExistingSubject(student, code, useSem);
+                        if(existingSr==null){
+                            boolean dupInNew=false;
+                            for(SubjectResult nr: toInsert){ if(nr.getCode().equalsIgnoreCase(code) && nr.getSemester().equalsIgnoreCase(useSem)){ dupInNew=true; break; } }
+                            if(dupInNew){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Duplicate SubjectResult for "+code+" semester "+useSem+" within file - skipped subject."); continue; }
+                            var creditOpt = creditResolver.resolveCredit(useSem, code);
+                            if(creditOpt.isEmpty()){
+                                errors.add("Row "+(r+1)+" (USN "+normUsn+"): Unknown subject code '"+code+"' semester "+useSem+" — no official credit mapping, using fallback 4.");
+                            }
+                            int credits = creditOpt.orElse(4);
+                            SubjectResult sr=new SubjectResult();
+                            sr.setCode(code); sr.setSubject(subject); sr.setCredits(credits); sr.setMarks(marks); sr.setSemester(useSem); sr.setStudent(student);
+                            toInsert.add(sr); rowInserted++;
+                        } else {
+                            if(existingSr.getMarks()!=null && existingSr.getMarks()==marks){
+                                rowUnchanged++;
+                            } else {
+                                existingSr.setMarks(marks);
+                                var creditOpt2 = creditResolver.resolveCredit(useSem, code);
+                                if(creditOpt2.isPresent() && !creditOpt2.get().equals(existingSr.getCredits())){
+                                    existingSr.setCredits(creditOpt2.get());
+                                }
+                                rowUpdated++;
                             }
                         }
-                        if(alreadyExists){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): Duplicate SubjectResult for "+header+" semester "+student.getSemester()+" - skipped subject."); continue; }
-                        SubjectResult sr=new SubjectResult();
-                        String code=header, subject=header;
-                        if(header.contains(":")){ String[] parts=header.split(":",2); code=parts[0].trim(); subject=parts[1].trim(); if(isBlank(subject)) subject=code; }
-                        sr.setCode(code); sr.setSubject(subject); sr.setCredits(4); sr.setMarks(marks); sr.setSemester(student.getSemester()); sr.setStudent(student);
-                        newResults.add(sr);
                     }
-                    if(newResults.isEmpty()){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): No valid subject marks found - skipped student."); continue; }
-                    for(SubjectResult nr: newResults) student.getResults().add(nr);
+                    if(toInsert.isEmpty() && rowUpdated==0 && rowUnchanged==0){ errors.add("Row "+(r+1)+" (USN "+normUsn+"): No valid subject marks found - skipped student."); skippedRows++; continue; }
+                    boolean hasSubjectChanges = rowInserted>0 || rowUpdated>0;
+                    boolean isStudentUnchanged = !isNew && !studentChanged && !hasSubjectChanges && rowUnchanged>0;
+                    for(SubjectResult nr: toInsert) student.getResults().add(nr);
                     studentService.calculateStudentData(student);
-                    if(isNew){ toSaveNewFallback.add(student); studentsImported++; subjectResultsImported+=newResults.size(); }
-                    else { studentRepository.save(student); studentsUpdated++; studentsImported++; subjectResultsImported+=newResults.size(); }
+                    if(isNew){
+                        toSaveNewFallback.add(student); studentsNew++; studentsImported++; subjectResultsInserted+=rowInserted; subjectResultsUnchanged+=rowUnchanged; subjectResultsImported+=rowInserted+rowUpdated;
+                    } else {
+                        if(isStudentUnchanged){
+                            studentsUnchanged++;
+                        } else {
+                            if(studentChanged || hasSubjectChanges){
+                                studentRepository.save(student);
+                                studentsUpdated++;
+                            } else {
+                                studentsUnchanged++;
+                            }
+                            studentsImported++;
+                        }
+                        subjectResultsInserted+=rowInserted; subjectResultsUpdated+=rowUpdated; subjectResultsUnchanged+=rowUnchanged; subjectResultsImported+=rowInserted+rowUpdated;
+                    }
                 }
-                if(studentsImported==0){
+                int totalProcessed = studentsNew + studentsUpdated + studentsUnchanged;
+                if(totalProcessed==0){
                     result.setSuccess(false); result.setMessage("No valid records to import. All rows had errors. No records were added."); result.setErrors(errors);
                     result.setStudentsImported(0); result.setSubjectResultsImported(0); return result;
                 }
                 for(Student s: toSaveNewFallback) studentRepository.save(s);
                 studentRepository.flush();
-                result.setSuccess(true); result.setMessage("Import successful. New: "+toSaveNewFallback.size()+", Updated: "+studentsUpdated);
+                String msg;
+                if(studentsNew==0 && studentsUpdated==0 && studentsUnchanged>0){
+                    msg = "Already uploaded — no changes detected. Students already up to date: "+studentsUnchanged;
+                } else {
+                    msg = "Import completed successfully. New: "+studentsNew+", Updated: "+studentsUpdated+", Unchanged: "+studentsUnchanged;
+                }
+                result.setSuccess(true); result.setMessage(msg);
                 result.setStudentsImported(studentsImported); result.setSubjectResultsImported(subjectResultsImported);
+                result.setStudentsNew(studentsNew); result.setStudentsUpdated(studentsUpdated); result.setStudentsUnchanged(studentsUnchanged);
+                result.setSubjectResultsInserted(subjectResultsInserted); result.setSubjectResultsUpdated(subjectResultsUpdated); result.setSubjectResultsUnchanged(subjectResultsUnchanged);
+                result.setSkippedRows(skippedRows); result.setDuplicateRowsWithinFile(duplicateRowsWithinFile);
                 result.setErrors(errors.isEmpty()?Collections.emptyList():errors);
                 try {
                     ExcelUploadHistory h = new ExcelUploadHistory();
@@ -459,6 +760,50 @@ public class ExcelImportService {
             if(studentsImported>0) throw new RuntimeException("Import failed, transaction rolled back: "+e.getMessage(),e);
             return result;
         }
+    }
+
+    private SubjectResult findExistingSubject(Student student, String code, String semester){
+        if(student==null || student.getResults()==null) return null;
+        for(SubjectResult sr: student.getResults()){
+            if(sr.getCode()!=null && sr.getCode().equalsIgnoreCase(code) && sr.getSemester()!=null && sr.getSemester().equalsIgnoreCase(semester)){
+                return sr;
+            }
+        }
+        return null;
+    }
+
+    private boolean isSubjectSame(SubjectResult existing, Integer tot, Integer intM, Integer extM, String re, Integer gp, String subjectName){
+        if(existing==null) return false;
+        if(!Objects.equals(existing.getMarks(), tot)) return false;
+        if(!Objects.equals(existing.getInternalMarks(), intM)) return false;
+        if(!Objects.equals(existing.getExternalMarks(), extM)) return false;
+        String existingRe = existing.getRe()==null?null:existing.getRe().trim().toUpperCase();
+        String incomingRe2 = re==null?null:re.trim().toUpperCase();
+        if(!Objects.equals(existingRe, incomingRe2)) return false;
+        if(!Objects.equals(existing.getGradePoint(), gp)) return false;
+        if(subjectName!=null && existing.getSubject()!=null && !existing.getSubject().trim().equalsIgnoreCase(subjectName.trim())) return false; // optional
+        return true;
+    }
+
+    private boolean isStudentChanged(Student existing, String incomingName, String incomingBranch, String incomingSemester, String incomingAcad, String incomingCollege, String incomingEmail, String incomingPhone, Boolean incomingLateral){
+        if(existing==null) return true;
+        if(!equalsTrim(existing.getName(), incomingName)) return true;
+        if(!equalsTrim(existing.getBranch(), incomingBranch)) return true;
+        if(!equalsTrim(existing.getSemester(), incomingSemester)) return true;
+        if(!equalsTrim(existing.getAcademicYear(), incomingAcad)) return true;
+        if(!isBlank(incomingCollege) && !equalsTrim(existing.getCollegeCode(), incomingCollege)) return true;
+        if(!isBlank(incomingEmail) && !equalsTrim(existing.getEmail(), incomingEmail)) return true;
+        if(!isBlank(incomingPhone) && !equalsTrim(existing.getPhoneNumber(), incomingPhone)) return true;
+        if(incomingLateral!=null && !Objects.equals(existing.getLateralEntry(), incomingLateral)) return true;
+        return false;
+    }
+
+    private boolean equalsTrim(String a, String b){
+        String aa = a==null?null:a.trim();
+        String bb = b==null?null:b.trim();
+        if(aa==null && bb==null) return true;
+        if(aa==null || bb==null) return false;
+        return aa.equalsIgnoreCase(bb);
     }
 
     private Sheet chooseSheet(Workbook wb){
@@ -502,19 +847,31 @@ public class ExcelImportService {
     private Map<String,Integer> resolveHeaderIndices(List<String> headers){
         Map<String,Integer> map=new HashMap<>();
         for(int i=0;i<headers.size();i++){
-            String h=headers.get(i).trim().toLowerCase();
-            if(h.equals("usn")||h.equals("usn no")||h.equals("usn number")||h.equals("university seat number")||h.equals("seat no")||h.equals("roll no")||h.equals("reg no")||h.equals("registration no")||h.contains("usn")){
+            String raw=headers.get(i).trim().toLowerCase();
+            String norm=raw.replaceAll("[._\\-]+"," ").replaceAll("\\s+"," ").trim(); // normalize
+            String compact=norm.replaceAll("\\s+",""); // without spaces for matching
+            if(norm.equals("usn")||norm.equals("usn no")||norm.equals("usn number")||norm.equals("university seat number")||norm.equals("seat no")||norm.equals("roll no")||norm.equals("reg no")||norm.equals("registration no")||norm.contains("usn")){
                 if(!map.containsKey("usn")) map.put("usn",i);
             }
-            if(h.equals("name")||h.equals("student name")||h.equals("candidate name")||h.equals("full name")||(h.contains("name")&&!h.contains("subject"))){
+            if(norm.equals("name")||norm.equals("student name")||norm.equals("candidate name")||norm.equals("full name")||(norm.contains("name")&&!norm.contains("subject"))){
                 if(!map.containsKey("name")) map.put("name",i);
             }
-            if(h.equals("branch")||h.equals("department")||h.equals("dept")) map.putIfAbsent("branch",i);
-            if(h.equals("semester")||h.equals("sem")) map.putIfAbsent("semester",i);
-            if(h.equals("academic year")||h.equals("academic_year")||h.equals("batch")||h.equals("year")) map.putIfAbsent("academic year",i);
-            if(h.equals("batch")) map.putIfAbsent("batch",i);
-            if(h.equals("email")||h.equals("e-mail")||h.equals("mail")) map.putIfAbsent("email",i);
-            if(h.equals("college code")||h.equals("college_code")||h.equals("college")||h.equals("collegecode")) map.putIfAbsent("college code",i);
+            if(norm.equals("branch")||norm.equals("department")||norm.equals("dept")) map.putIfAbsent("branch",i);
+            if(norm.equals("semester")||norm.equals("sem")) map.putIfAbsent("semester",i);
+            if(norm.equals("academic year")||norm.equals("academic year")||norm.equals("batch")||norm.equals("year")) map.putIfAbsent("academic year",i);
+            if(norm.equals("batch")) map.putIfAbsent("batch",i);
+            // Email variants
+            if(compact.equals("email")||compact.equals("emailaddress")||compact.equals("emailid")||norm.equals("e mail")||norm.equals("e-mail")||norm.equals("mail")||norm.equals("student email")||norm.equals("student email id")||norm.equals("student email address")||norm.contains("email")){
+                map.putIfAbsent("email",i);
+            }
+            // Phone variants
+            if(compact.equals("phone")||compact.equals("phonenumber")||compact.equals("phoneno")||compact.equals("mobile")||compact.equals("mobilenumber")||compact.equals("mobileno")||compact.equals("contact")||compact.equals("contactnumber")||compact.equals("contactno")||norm.equals("phone number")||norm.equals("phone no")||norm.equals("mobile number")||norm.equals("mobile no")||norm.equals("contact number")||norm.equals("contact no")||norm.equals("mobile no.")||norm.equals("phone no.")||norm.contains("phone")||norm.contains("mobile")||norm.contains("contact")){
+                // Avoid false positives: ensure not subject
+                if(!norm.contains("subject")){
+                    map.putIfAbsent("phone",i);
+                }
+            }
+            if(norm.equals("college code")||norm.equals("college code")||compact.equals("collegecode")||norm.equals("college")) map.putIfAbsent("college code",i);
         }
         if(map.containsKey("academic year")&&!map.containsKey("batch")) map.put("batch",map.get("academic year"));
         if(map.containsKey("batch")&&!map.containsKey("academic year")) map.put("academic year",map.get("batch"));
@@ -569,15 +926,6 @@ public class ExcelImportService {
         return true;
     }
 
-    /**
-     * Lateral detection per student.
-     * HOD sheets contain both Regular and Lateral in same file without explicit marker.
-     * We first check if workbook has an explicit lateral column (header contains "lateral" or "entry type").
-     * If found, use that cell value (Lateral/Regular).
-     * Otherwise, preserve existing student's lateral value if updating, else default to Regular (false).
-     * We do NOT fabricate from USN pattern alone, as HOD data shows no reliable USN-based lateral marker.
-     * Reports limitation via validationWarnings if needed.
-     */
     private Boolean detectLateralFromRow(Row row, Map<String,Integer> colIndex, String usn, Student existing){
         if(existing!=null && existing.getLateralEntry()!=null) return existing.getLateralEntry();
         if(row!=null && colIndex!=null){
@@ -591,8 +939,54 @@ public class ExcelImportService {
                 }
             }
         }
-        // No explicit info — default to Regular (false) for new students, preserve existing otherwise
-        // Could also check USN stable ID >=400 as heuristic for lateral (2KD25EC400), but HOD 3rd/4th have no such, so keep false
         return false;
+    }
+
+    private String normalizePhone(String raw){
+        if(isBlank(raw)) return null;
+        String digits = raw.replaceAll("[^0-9]","");
+        // Handle +91 prefix
+        if(digits.length()>10 && digits.startsWith("91") && digits.length()>=12){
+            digits = digits.substring(digits.length()-10);
+        } else if(digits.length()>10){
+            digits = digits.substring(digits.length()-10);
+        }
+        return digits;
+    }
+
+    private boolean isValidPhone(String phone){
+        if(isBlank(phone)) return false;
+        String n = normalizePhone(phone);
+        return n!=null && n.matches("\\d{10}");
+    }
+
+    private void ensureStudentAccount(String usn, String name, String phone, List<String> warnings, List<String> errors){
+        String normUsn = usn==null?null:usn.trim().toUpperCase();
+        if(isBlank(normUsn)) return;
+        Optional<User> existingUser = userRepository.findByUserId(normUsn);
+        if(existingUser.isPresent()){
+            // Existing account — preserve password, do not change on phone update
+            return;
+        }
+        // New student account
+        String normalizedPhone = normalizePhone(phone);
+        if(!isValidPhone(normalizedPhone)){
+            String msg = "Student "+normUsn+" imported, but Student login account could not be created because no valid mobile number was provided.";
+            if(warnings!=null) warnings.add(msg);
+            else if(errors!=null) errors.add(msg);
+            return;
+        }
+        User u = new User();
+        u.setUserId(normUsn);
+        u.setName(name!=null?name:normUsn);
+        u.setPhone(normalizedPhone);
+        u.setRole("STUDENT");
+        u.setPassword(encoder.encode(normalizedPhone));
+        u.setMustChangePassword(true);
+        try{
+            userRepository.save(u);
+        }catch(Exception e){
+            if(errors!=null) errors.add("Failed to create student account for "+normUsn+": "+e.getMessage());
+        }
     }
 }

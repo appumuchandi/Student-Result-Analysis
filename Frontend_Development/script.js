@@ -24,28 +24,59 @@ form.addEventListener("submit", async (event) => {
             body: JSON.stringify({ userId, password })
         });
 
-        const data = await response.text();
-
+        let dataText = await response.text();
+        let dataJson = null;
+        try{ dataJson = JSON.parse(dataText); }catch(e){}
+        const isSuccess = response.ok && (dataJson?.message==='Login Successful' || dataText.trim()==='Login Successful');
         if (!response.ok) {
-            msg.textContent = data || "Invalid User ID or password.";
+            const errMsg = dataJson?.message || dataText || "Invalid User ID or password.";
+            msg.textContent = errMsg;
             msg.style.color = "#dc2626";
             return;
         }
 
-        if (data.trim() === "Login Successful" || data.trim() === "Login Successful") {
+        if (isSuccess) {
             localStorage.setItem("userId", userId);
+            const role = (dataJson?.role||'').toUpperCase();
+            if(role) localStorage.setItem("userRole", role);
+            if(dataJson?.mustChangePassword) localStorage.setItem("mustChangePassword","true");
+            else localStorage.removeItem("mustChangePassword");
 
             msg.textContent = "Login successful.";
             msg.style.color = "#15803d";
 
-            setTimeout(() => {
-                window.location.href = "home.html";
+            // Role-aware redirect: get fresh role from /api/auth/me (source of truth)
+            setTimeout(async () => {
+                try{
+                    const meRes = await fetch(`${API_BASE}/api/auth/me`, {credentials:'include'});
+                    if(meRes.ok){
+                        const me = await meRes.json();
+                        const r = (me.role||role||'').toUpperCase();
+                        if(r==='HOD'){
+                            window.location.href = "dashboard.html";
+                            return;
+                        } else if(r==='ADMIN'){
+                            window.location.href = "dashboard.html";
+                            return;
+                        } else if(r==='STUDENT'){
+                            window.location.href = "dashboard.html";
+                            return;
+                        }
+                    }
+                }catch(e){}
+                // Fallback: use role from login response
+                if(role==='HOD' || role==='ADMIN' || role==='STUDENT'){
+                    window.location.href = "dashboard.html";
+                } else {
+                    window.location.href = "home.html";
+                }
             }, 500);
 
         }
 
         else {
-            msg.textContent = data || "Invalid User ID or password.";
+            const errMsg = dataJson?.message || dataText || "Invalid User ID or password.";
+            msg.textContent = errMsg;
             msg.style.color = "#dc2626";
         }
 
@@ -58,4 +89,7 @@ form.addEventListener("submit", async (event) => {
 
 document.getElementById("createAccount").addEventListener("click", () => {
     window.location.href = "register.html";
+});
+document.getElementById("forgotPasswordBtn").addEventListener("click", () => {
+    window.location.href = "forgot_password.html";
 });

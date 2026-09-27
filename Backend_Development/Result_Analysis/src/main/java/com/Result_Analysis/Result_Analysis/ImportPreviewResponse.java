@@ -30,6 +30,16 @@ public class ImportPreviewResponse {
     // Uploader info: backend-generated, not browser-trusted; shown as ONLY visible uploader section in Dashboard
     private String uploadedBy;
     private java.time.LocalDateTime uploadedAt;
+    // --- Sync preview counters (read-only, no DB write) ---
+    private int newStudents;
+    private int existingStudents;
+    private int studentsWithChanges;
+    private int studentsAlreadyUpToDate;
+    private int newSubjectResults;
+    private int subjectResultsToUpdate;
+    private int subjectResultsAlreadyUpToDate;
+    private int invalidRows;
+    private int duplicateRowsWithinFile;
 
     public ImportPreviewResponse() {}
 
@@ -69,4 +79,22 @@ public class ImportPreviewResponse {
     public void setUploadedBy(String uploadedBy) { this.uploadedBy = uploadedBy; }
     public java.time.LocalDateTime getUploadedAt() { return uploadedAt; }
     public void setUploadedAt(java.time.LocalDateTime uploadedAt) { this.uploadedAt = uploadedAt; }
+    public int getNewStudents() { return newStudents; }
+    public void setNewStudents(int v) { this.newStudents = v; }
+    public int getExistingStudents() { return existingStudents; }
+    public void setExistingStudents(int v) { this.existingStudents = v; }
+    public int getStudentsWithChanges() { return studentsWithChanges; }
+    public void setStudentsWithChanges(int v) { this.studentsWithChanges = v; }
+    public int getStudentsAlreadyUpToDate() { return studentsAlreadyUpToDate; }
+    public void setStudentsAlreadyUpToDate(int v) { this.studentsAlreadyUpToDate = v; }
+    public int getNewSubjectResults() { return newSubjectResults; }
+    public void setNewSubjectResults(int v) { this.newSubjectResults = v; }
+    public int getSubjectResultsToUpdate() { return subjectResultsToUpdate; }
+    public void setSubjectResultsToUpdate(int v) { this.subjectResultsToUpdate = v; }
+    public int getSubjectResultsAlreadyUpToDate() { return subjectResultsAlreadyUpToDate; }
+    public void setSubjectResultsAlreadyUpToDate(int v) { this.subjectResultsAlreadyUpToDate = v; }
+    public int getInvalidRows() { return invalidRows; }
+    public void setInvalidRows(int v) { this.invalidRows = v; }
+    public int getDuplicateRowsWithinFile() { return duplicateRowsWithinFile; }
+    public void setDuplicateRowsWithinFile(int v) { this.duplicateRowsWithinFile = v; }
 }

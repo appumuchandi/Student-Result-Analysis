@@ -16,6 +16,15 @@ public class ImportResultResponse {
     private String entryType;
     private String collegeCode;
     private List<String> errors;
+    // Detailed sync counters
+    private int studentsNew;
+    private int studentsUpdated;
+    private int studentsUnchanged;
+    private int subjectResultsInserted;
+    private int subjectResultsUpdated;
+    private int subjectResultsUnchanged;
+    private int skippedRows;
+    private int duplicateRowsWithinFile;
 
     public ImportResultResponse() {}
 
@@ -39,4 +48,20 @@ public class ImportResultResponse {
     public void setCollegeCode(String collegeCode) { this.collegeCode = collegeCode; }
     public List<String> getErrors() { return errors; }
     public void setErrors(List<String> errors) { this.errors = errors; }
+    public int getStudentsNew() { return studentsNew; }
+    public void setStudentsNew(int v) { this.studentsNew = v; }
+    public int getStudentsUpdated() { return studentsUpdated; }
+    public void setStudentsUpdated(int v) { this.studentsUpdated = v; }
+    public int getStudentsUnchanged() { return studentsUnchanged; }
+    public void setStudentsUnchanged(int v) { this.studentsUnchanged = v; }
+    public int getSubjectResultsInserted() { return subjectResultsInserted; }
+    public void setSubjectResultsInserted(int v) { this.subjectResultsInserted = v; }
+    public int getSubjectResultsUpdated() { return subjectResultsUpdated; }
+    public void setSubjectResultsUpdated(int v) { this.subjectResultsUpdated = v; }
+    public int getSubjectResultsUnchanged() { return subjectResultsUnchanged; }
+    public void setSubjectResultsUnchanged(int v) { this.subjectResultsUnchanged = v; }
+    public int getSkippedRows() { return skippedRows; }
+    public void setSkippedRows(int v) { this.skippedRows = v; }
+    public int getDuplicateRowsWithinFile() { return duplicateRowsWithinFile; }
+    public void setDuplicateRowsWithinFile(int v) { this.duplicateRowsWithinFile = v; }
 }

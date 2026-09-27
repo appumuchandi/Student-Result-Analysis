@@ -16,10 +16,17 @@ public class AnalyticsService {
     }
 
     @Transactional(readOnly = true)
-    public List<SubjectStatsDto> getSubjectStats(String semesterFilter) {
-        List<Student> all = studentRepository.findAll();
-        // Ensure lazy collections initialized within transaction
-        for (Student s : all) { s.getResults().size(); }
+    public List<SubjectStatsDto> getSubjectStatsForStudent(String semesterFilter, String authUsn) {
+        var opt = studentRepository.findByUsnIgnoreCase(authUsn);
+        if(opt.isEmpty()) return List.of();
+        Student s = opt.get();
+        s.getResults().size();
+        // Reuse logic but only for this student
+        List<Student> single = List.of(s);
+        return computeSubjectStats(single, semesterFilter);
+    }
+
+    private List<SubjectStatsDto> computeSubjectStats(List<Student> all, String semesterFilter){
         // Map subjectName -> list of marks
         Map<String, List<Integer>> marksBySubject = new LinkedHashMap<>();
         Map<String, String> codeBySubject = new HashMap<>();
@@ -33,16 +40,13 @@ public class AnalyticsService {
             if (s.getResults() == null) continue;
             for (SubjectResult sr : s.getResults()) {
                 if (sr.getSubject() == null || sr.getSubject().trim().isEmpty()) continue;
-                // Filter by semester if provided
                 if (hasFilter) {
                     String srSem = normalizeSemester(sr.getSemester());
                     String studentSem = normalizeSemester(s.getSemester());
-                    // Also check result's semester; if neither matches, skip
                     boolean matches = filterNorm.equals(srSem) || filterNorm.equals(studentSem);
                     if (!matches) continue;
                 }
                 String subjectKey = sr.getSubject().trim();
-                // Use subject as key; keep code if available
                 if (sr.getCode() != null && !sr.getCode().trim().isEmpty()) {
                     codeBySubject.putIfAbsent(subjectKey, sr.getCode().trim());
                 }
@@ -83,10 +87,30 @@ public class AnalyticsService {
             dto.setTotalStudents(total);
             result.add(dto);
         }
-
-        // Sort by subject name for stable output
         result.sort(Comparator.comparing(SubjectStatsDto::getSubject, String.CASE_INSENSITIVE_ORDER));
         return result;
+    }
+
+    @Transactional(readOnly = true)
+    public List<SubjectStatsDto> getSubjectStats(String semesterFilter) {
+        List<Student> all = studentRepository.findAll();
+        for (Student s : all) { s.getResults().size(); }
+        return computeSubjectStats(all, semesterFilter);
+    }
+
+    @Transactional(readOnly = true)
+    public LateralStatsDto getLateralEntryStatsForStudent(String semester, String authUsn) {
+        var opt = studentRepository.findByUsnIgnoreCase(authUsn);
+        if(opt.isEmpty()) return new LateralStatsDto(semester!=null?semester:"All",0,0);
+        Student s = opt.get();
+        s.getResults().size();
+        boolean isLateral = s.getLateralEntry()!=null && s.getLateralEntry();
+        LateralStatsDto dto = new LateralStatsDto();
+        dto.setSemester(semester!=null?semester:s.getSemester());
+        dto.setRegularCount(isLateral?0:1);
+        dto.setLateralCount(isLateral?1:0);
+        dto.setTotalCount(1);
+        return dto;
     }
 
     @Transactional(readOnly = true)

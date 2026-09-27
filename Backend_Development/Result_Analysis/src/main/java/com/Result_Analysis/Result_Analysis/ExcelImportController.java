@@ -40,10 +40,12 @@ public class ExcelImportController {
             @RequestParam(value = "uploadedBy", required = false) String uploadedByParam,
             HttpServletRequest request) {
         try {
+            // HOD-only: must be authenticated HOD
+            String role = resolveAuthenticatedRole(request);
+            if(role==null) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error","Not authenticated"));
+            if(!"HOD".equalsIgnoreCase(role)) return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error","Only HOD can preview import"));
             String dept = (department != null && !department.trim().isEmpty()) ? department : branch;
-            // SECURITY: Do NOT trust browser-supplied uploadedBy; resolve from server-side session (AUTH_USER_ID)
             String uploader = resolveAuthenticatedUser(request);
-            // uploadedByParam is ignored for security; kept only for backward compat but not trusted
             java.time.LocalDateTime now = java.time.LocalDateTime.now();
             ImportPreviewResponse resp = excelImportService.preview(file, dept, semester, batch, entryType, collegeCode);
             resp.setUploadedBy(uploader);
@@ -69,9 +71,17 @@ public class ExcelImportController {
             @RequestParam(value = "uploadedBy", required = false) String uploadedByParam,
             HttpServletRequest request) {
         try {
+            String role = resolveAuthenticatedRole(request);
+            if(role==null) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("success",false,"message","Not authenticated. Please login as HOD before Confirm Import."));
+            if(!"HOD".equalsIgnoreCase(role)) return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("success",false,"message","Only HOD can confirm import"));
             String dept = (department != null && !department.trim().isEmpty()) ? department : branch;
-            // SECURITY: Resolve uploader from server session, not from browser-supplied uploadedByParam
             String uploader = resolveAuthenticatedUser(request);
+            if("unknown".equals(uploader)){
+                Map<String, Object> err = new HashMap<>();
+                err.put("success", false);
+                err.put("message", "Not authenticated. Please login as HOD before Confirm Import.");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(err);
+            }
             ImportResultResponse resp = excelImportService.importConfirm(file, dept, semester, batch, entryType, collegeCode, uploader);
             if (!resp.isSuccess()) {
                 return ResponseEntity.ok(resp);
@@ -95,8 +105,23 @@ public class ExcelImportController {
             Object uid = session.getAttribute("AUTH_USER_ID");
             if(uid != null && !uid.toString().trim().isEmpty()) return uid.toString().trim();
         }
-        // No authenticated session — do NOT trust browser-supplied uploadedByParam; return unknown
         return "unknown";
+    }
+
+    private String resolveAuthenticatedRole(HttpServletRequest request){
+        if(request == null) return null;
+        HttpSession session = request.getSession(false);
+        if(session != null){
+            Object role = session.getAttribute("AUTH_USER_ROLE");
+            if(role != null && !role.toString().trim().isEmpty()) return role.toString().trim().toUpperCase();
+            // Fallback: try to infer from userId if role not in session (for old sessions)
+            Object uid = session.getAttribute("AUTH_USER_ID");
+            if(uid != null){
+                // This will be handled by DB lookup in real implementation, but for now return null to force re-login
+                return null;
+            }
+        }
+        return null;
     }
 
     // Health check for import feature
@@ -112,7 +137,8 @@ public class ExcelImportController {
 
     @GetMapping("/api/import/history/latest")
     public ResponseEntity<?> latestHistory() {
-        var opt = uploadHistoryRepository.findTopByOrderByUploadedAtDesc();
+        var opt = uploadHistoryRepository.findTopByOrderByUploadedAtDescIdDesc();
+        if (opt.isEmpty()) opt = uploadHistoryRepository.findTopByOrderByUploadedAtDesc();
         if (opt.isPresent()) return ResponseEntity.ok(opt.get());
         return ResponseEntity.ok(Map.of("message", "No Excel sheet has been uploaded yet."));
     }

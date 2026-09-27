@@ -49,7 +49,8 @@
 </head>
 <body>
     <div class="dashboard-layout">
-        <aside class="sidebar">
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+        <aside class="sidebar" id="sidebar">
             <div>
                 <h2>🎓 Result Analysis</h2>
                 <p>Student Portal</p>
@@ -57,17 +58,67 @@
             <nav class="menu"><button id="dashboardBtn">🏠 Dashboard</button><button id="resultBtn">📊 My Result</button><button id="rankBtn">🏆 Rank Analysis</button><button id="logoutBtn">🚪 Logout</button></nav>
         </aside>
         <main class="main">
-            <div class="profile-top">
-                <div>
-                    <p class="muted">WELCOME BACK 👋</p>
-                    <h1>Student Dashboard</h1>
-                    <p class="subtitle">Your academic performance at a glance.</p>
+            <div class="profile-top" id="profileTopStudent">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <button class="hamburger" id="hamburgerBtn" aria-label="Menu">☰</button>
+                    <div>
+                        <p class="muted">WELCOME BACK 👋</p>
+                        <h1 style="margin:4px 0;" id="dashboardTitle">Loading...</h1>
+                        <p class="subtitle" id="dashboardSubtitle">Please wait while we load your dashboard.</p>
+                    </div>
                 </div>
                 <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
                     <button class="btn secondary" id="profileBtn">👤 Profile</button>
+                    <button class="btn secondary" id="changePwdBtn">🔑 Change Password</button>
                 </div>
             </div>
-            <section class="card">
+            <!-- HOD Dashboard — Department Result Analysis (hidden for STUDENT) -->
+            <section class="card hidden" id="hodDashboardHeader">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <div style="font-size:28px;">🏫</div>
+                    <div>
+                        <h2 style="margin:0;">HOD Dashboard</h2>
+                        <p class="muted" style="margin:2px 0 0;">Department Result Analysis</p>
+                    </div>
+                </div>
+            </section>
+            <section class="card hidden" id="hodDeptOverview">
+                <h2 style="margin:0 0 4px;">Department Overview</h2>
+                <p class="muted" style="margin:0 0 12px; font-size:13px;">Real-time department statistics</p>
+                <div class="summary-grid" style="margin:0;">
+                    <div class="summary"><small>Total Students</small><strong id="hodTotalStudents">--</strong></div>
+                    <div class="summary"><small>Passed</small><strong id="hodPassed">--</strong></div>
+                    <div class="summary"><small>Failed</small><strong id="hodFailed">--</strong></div>
+                    <div class="summary"><small>Average SGPA</small><strong id="hodAvgSgpa">--</strong></div>
+                    <div class="summary"><small>Average Percentage</small><strong id="hodAvgPerc">--</strong></div>
+                    <div class="summary"><small>Total Backlogs</small><strong id="hodTotalBacklogs">--</strong></div>
+                </div>
+            </section>
+            <section class="card hidden" id="hodPerformanceOverview">
+                <h2 style="margin:0 0 4px;">Performance Overview</h2>
+                <p class="muted" style="margin:0 0 12px; font-size:13px;">Subject-wise average marks & pass percentage</p>
+                <div class="table-wrap"><table>
+                    <thead><tr><th>Subject</th><th>Code</th><th>Avg Marks</th><th>Pass %</th></tr></thead>
+                    <tbody id="hodSubjectStatsBody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+                </table></div>
+            </section>
+            <section class="card hidden" id="hodQuickAccess">
+                <h2 style="margin:0 0 8px;">Quick Access</h2>
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                    <a href="#uploadCard" class="btn secondary" style="text-decoration:none;">📤 Excel Import</a>
+                    <a href="rank_analysis.html" class="btn secondary" style="text-decoration:none;">🏆 Rank Analysis</a>
+                </div>
+            </section>
+            <section class="card hidden" id="changePasswordCard">
+                <h2>Change Password</h2>
+                <p class="muted" id="mustChangeMsg" style="margin:6px 0 14px;">For security, please change your initial password.</p>
+                <div class="field"><label>Current Password</label><input type="password" id="currentPwd" placeholder="Enter current password"></div>
+                <div class="field" style="margin-top:10px;"><label>New Password</label><input type="password" id="newPwd" placeholder="Enter new password"></div>
+                <div class="field" style="margin-top:10px;"><label>Confirm New Password</label><input type="password" id="confirmPwd" placeholder="Confirm new password"></div>
+                <p id="changePwdMsg" class="message" style="margin:10px 0;"></p>
+                <div class="actions"><button class="btn" id="doChangePwdBtn">Update Password</button><button class="btn secondary" id="cancelChangePwdBtn">Cancel</button></div>
+            </section>
+            <section class="card hidden" id="studentDetailsCard">
                 <h2>Student Details</h2>
                 <div class="detail-grid">
                     <div class="detail"><small>Name</small><strong id="studentName">Loading...</strong></div>
@@ -76,9 +127,10 @@
                     <div class="detail"><small>Semester</small><strong id="semester">--</strong></div>
                     <div class="detail"><small>Academic Year</small><strong id="year">--</strong></div>
                     <div class="detail"><small>Email</small><strong id="profileEmail">--</strong></div>
+                    <div class="detail"><small>Phone Number</small><strong id="profilePhone">--</strong></div>
                 </div>
             </section>
-            <section class="summary-grid">
+            <section class="summary-grid hidden" id="studentSummaryGrid">
                 <div class="summary"><small>SGPA</small><strong id="sgpa">--</strong></div>
                 <div class="summary"><small>CGPA</small><strong id="cgpa">--</strong></div>
                 <div class="summary"><small>Percentage</small><strong id="percentage">--</strong></div>
@@ -86,10 +138,10 @@
                 <div class="summary"><small>Backlog</small><strong id="backlog">0</strong></div>
             </section>
 
-            <!-- Upload / Update Student Results — as per spec #4 -->
-            <section class="card" id="uploadCard" style="margin-top:18px;">
+            <!-- Upload / Update Student Results — HOD only -->
+            <section class="card hidden" id="uploadCard" style="margin-top:18px;">
                 <h2>📤 Upload / Update Student Results <button id="uploadInfoBtn" title="Upload the semester Excel sheet to add or update student result records. Select the Department, Batch and Semester before uploading." style="background:#eef4ff; border:1px solid #dbe4f0; border-radius:50%; width:28px; height:28px; font-weight:800; color:#1e40af; cursor:pointer; margin-left:8px;">ⓘ</button></h2>
-                <p class="muted" style="margin:6px 0 14px;">For admin/HOD: Select Department, Batch, Semester and Excel file, then preview and confirm to update MySQL. Preview does not write to DB.</p>
+                <p class="muted" style="margin:6px 0 14px;">Upload the official HOD Excel sheet to preview and update student results.</p>
                 <div id="uploadHistoryBox" class="alert alert-success hidden" style="margin-bottom:12px;"></div>
                 
                 <div class="upload-grid">
@@ -110,7 +162,6 @@
 
                 <div class="actions" style="margin-top:14px;">
                     <button class="btn" id="previewBtn" type="button" disabled>📤 Submit Excel</button>
-                    <span class="muted" style="font-size:13px;">Submit sends file for preview — no MySQL write until Confirm Import</span>
                 </div>
 
                 <!-- Preview -->
@@ -130,6 +181,18 @@
                             <div class="stat-box"><small>Subjects detected</small><strong id="p-subjects">0</strong></div>
                             <div class="stat-box"><small>Total rows</small><strong id="p-rows">0</strong></div>
                         </div>
+                        <div id="syncPreviewBox" class="alert alert-success hidden" style="text-align:left; line-height:1.7;"></div>
+                        <div id="syncPreviewGrid" class="stats-grid hidden" style="margin-top:8px;">
+                            <div class="stat-box"><small>New Students</small><strong id="p-newStudents">0</strong></div>
+                            <div class="stat-box"><small>Existing Students</small><strong id="p-existingStudents">0</strong></div>
+                            <div class="stat-box"><small>Students With Changes</small><strong id="p-studentsWithChanges">0</strong></div>
+                            <div class="stat-box"><small>Already Up To Date</small><strong id="p-studentsUnchanged">0</strong></div>
+                            <div class="stat-box"><small>New Subject Results</small><strong id="p-newSubjects">0</strong></div>
+                            <div class="stat-box"><small>Subject To Update</small><strong id="p-subjectToUpdate">0</strong></div>
+                            <div class="stat-box"><small>Subject Already Up To Date</small><strong id="p-subjectUnchanged">0</strong></div>
+                            <div class="stat-box"><small>Invalid Rows</small><strong id="p-invalidRows">0</strong></div>
+                            <div class="stat-box"><small>Duplicate Rows</small><strong id="p-duplicateRows">0</strong></div>
+                        </div>
                         <div id="errorBox" class="hidden"></div>
                         <div id="warnBox" class="hidden"></div>
                         <h4 style="margin:14px 0 8px;">First 5 rows</h4>
@@ -145,7 +208,7 @@
                 <div id="confirmCard" class="card hidden" style="margin-top:14px; background: linear-gradient(135deg, #fff, #f0fdf4);">
                     <h3>Confirm Import</h3>
                     <p id="confirmSummary" style="line-height:1.7;"></p>
-                    <p style="font-weight:700; margin-top:10px;">Do you want to continue? This will write to MySQL transactionally.</p>
+                    <p style="font-weight:700; margin-top:10px;">Do you want to continue? This will update records transactionally.</p>
                     <div class="actions" style="justify-content:center; margin-top:12px;">
                         <button class="btn secondary" id="cancelImport" type="button">Cancel</button>
                         <button class="btn" id="doImportBtn" type="button">✅ Confirm Import</button>
@@ -163,6 +226,17 @@
                         <div class="stat-box"><small>Semester</small><strong id="s-sem">—</strong></div>
                         <div class="stat-box"><small>Batch</small><strong id="s-batch">—</strong></div>
                     </div>
+                    <div id="successSyncGrid" class="stats-grid hidden" style="max-width:640px; margin:0 auto 12px;">
+                        <div class="stat-box"><small>Students New</small><strong id="s-new">0</strong></div>
+                        <div class="stat-box"><small>Students Updated</small><strong id="s-updated">0</strong></div>
+                        <div class="stat-box"><small>Students Unchanged</small><strong id="s-unchanged">0</strong></div>
+                        <div class="stat-box"><small>Subject Inserted</small><strong id="s-subInserted">0</strong></div>
+                        <div class="stat-box"><small>Subject Updated</small><strong id="s-subUpdated">0</strong></div>
+                        <div class="stat-box"><small>Subject Unchanged</small><strong id="s-subUnchanged">0</strong></div>
+                        <div class="stat-box"><small>Skipped Rows</small><strong id="s-skipped">0</strong></div>
+                        <div class="stat-box"><small>Duplicate Rows</small><strong id="s-dupRows">0</strong></div>
+                    </div>
+                    <div id="successSyncBox" class="alert alert-success hidden" style="text-align:left; line-height:1.7;"></div>
                     <div id="successWarnings" class="alert alert-warn hidden" style="text-align:left;"></div>
                     <div class="actions" style="justify-content:center;">
                         <button class="btn secondary" id="importAnotherBtn" type="button">Import Another</button>
@@ -172,7 +246,7 @@
                 <div id="importError" class="alert alert-error hidden"></div>
             </section>
 
-            <section class="card" id="resultSection" style="margin-top:18px;">
+            <section class="card hidden" id="resultSection" style="margin-top:18px;">
                 <div class="profile-top">
                     <div>
                         <h2>Subject-wise Result</h2>

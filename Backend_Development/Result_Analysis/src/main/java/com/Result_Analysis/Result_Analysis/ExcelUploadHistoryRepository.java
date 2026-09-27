@@ -5,4 +5,5 @@ import java.util.Optional;
 
 public interface ExcelUploadHistoryRepository extends JpaRepository<ExcelUploadHistory, Long> {
     Optional<ExcelUploadHistory> findTopByOrderByUploadedAtDesc();
+    Optional<ExcelUploadHistory> findTopByOrderByUploadedAtDescIdDesc();
 }

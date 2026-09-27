@@ -22,6 +22,33 @@ public class CompareService {
     }
 
     @Transactional(readOnly = true)
+    public BatchComparisonResponse compareForStudent(String currentBatch, String previousBatch, String branch, String semester, String subjectCode, String authUsn) {
+        // STUDENT: only own stableId
+        BatchComparisonResponse full = compare(currentBatch, previousBatch, branch, semester, subjectCode);
+        String stable = extractStableId(authUsn);
+        if(stable==null || stable.isEmpty()) {
+            full.setComparisons(List.of());
+            full.setMatchedStudents(0);
+            return full;
+        }
+        List<SubjectComparisonDto> filtered = new ArrayList<>();
+        for(SubjectComparisonDto dto : full.getComparisons()){
+            String curStable = dto.getCurrentUsn()!=null ? extractStableId(dto.getCurrentUsn()) : null;
+            String prevStable = dto.getPreviousUsn()!=null ? extractStableId(dto.getPreviousUsn()) : null;
+            if(stable.equals(curStable) || stable.equals(prevStable)){
+                // Only expose own comparison, hide other student's marks? Keep as is but filtered
+                // For privacy, we could clear other student's marks if not own, but spec says own-related only, so we keep the pair where own stable matches
+                filtered.add(dto);
+            }
+        }
+        full.setComparisons(filtered);
+        // Recalculate matched counts for filtered
+        long matched = filtered.stream().filter(d -> d.getCurrentMarks()!=null && d.getPreviousMarks()!=null).count();
+        full.setMatchedStudents((int)matched);
+        return full;
+    }
+
+    @Transactional(readOnly = true)
     public BatchComparisonResponse compare(String currentBatch, String previousBatch, String branch, String semester, String subjectCode) {
         BatchComparisonResponse resp = new BatchComparisonResponse();
         resp.setCurrentBatch(currentBatch);

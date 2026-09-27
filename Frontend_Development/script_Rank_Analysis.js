@@ -242,10 +242,7 @@ async function downloadExcel() {
     const blob = await response.blob();
     // Validate blob is not CSV and has xlsx magic (PK zip header)
     const headerCheck = await blob.slice(0, 2).text().catch(()=> '');
-    // Content-Type should be xlsx
     const ct = response.headers.get('Content-Type') || '';
-    // console log for verification
-    console.log('Excel blob size', blob.size, 'type', blob.type, 'headerContentType', ct);
 
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -386,7 +383,6 @@ async function downloadPdf(){
     }
     const blob = await response.blob();
     const ct = response.headers.get('Content-Type')||'';
-    console.log('PDF blob size', blob.size, 'type', blob.type, 'ct', ct);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href=url;
